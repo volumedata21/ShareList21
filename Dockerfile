@@ -10,12 +10,19 @@ RUN npm ci
 # Copy Source
 COPY . .
 
-# 1. Build Frontend (Vite) -> outputs to /app/dist
+# 1. Build Frontend
 RUN npm run build
 
-# 2. Build Backend (TSC) -> outputs to /app/dist-server
-# We run tsc explicitly on the backend files
-RUN npx tsc server.ts client.ts scanner.ts types.ts --outDir dist-server --esModuleInterop --resolveJsonModule
+# 2. Build Backend
+# CRITICAL FIX: Added --skipLibCheck and --module NodeNext
+RUN npx tsc server.ts client.ts scanner.ts types.ts \
+    --outDir dist-server \
+    --esModuleInterop \
+    --resolveJsonModule \
+    --skipLibCheck \
+    --module NodeNext \
+    --moduleResolution NodeNext \
+    --target ES2022
 
 
 # --- Stage 2: Runner ---
