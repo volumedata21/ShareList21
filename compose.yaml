@@ -1,6 +1,6 @@
 services:
   sharelist-server:
-    image: your-repo/sharelist21:latest
+    image: volumedata21/sharelist21:latest
     container_name: sharelist-server
     restart: unless-stopped
     ports:

@@ -1,10 +1,10 @@
 # ShareList21
 
-## Server compose.yaml
+### Server compose.yaml
 ```
 services:
   sharelist-server:
-    image: your-repo/sharelist21:latest
+    image: volumedata21/sharelist21:latest
     container_name: sharelist-server
     restart: unless-stopped
     ports:
@@ -22,11 +22,11 @@ services:
       - MEDIA_ROOT=/media
 ```
 
-## Client compose.yaml
+### Client compose.yaml
 ```
 services:
   sharelist-client:
-    image: your-repo/sharelist21:latest
+    image: volumedata21/sharelist21:latest
     container_name: sharelist-client
     restart: unless-stopped
     # No ports needed! It's just an outgoing script.
