@@ -10,19 +10,21 @@ RUN npm ci
 # Copy Source
 COPY . .
 
-# 1. Build Frontend
+# 1. Build Frontend (Vite)
 RUN npm run build
 
-# 2. Build Backend
-# CRITICAL FIX: Added --skipLibCheck and --module NodeNext
-RUN npx tsc server.ts client.ts scanner.ts types.ts \
-    --outDir dist-server \
-    --esModuleInterop \
-    --resolveJsonModule \
-    --skipLibCheck \
-    --module NodeNext \
-    --moduleResolution NodeNext \
-    --target ES2022
+# 2. Build Backend (Esbuild)
+# - --bundle: Combines scanner.ts into server.js/client.js (fixes import errors)
+# - --packages=external: Keeps node_modules external (sqlite3 works better this way)
+# - --format=esm: Outputs modern ES Modules
+# - --platform=node: Optimizes for Node.js
+RUN npx esbuild server.ts client.ts \
+    --bundle \
+    --platform=node \
+    --target=node20 \
+    --format=esm \
+    --packages=external \
+    --outdir=dist-server
 
 
 # --- Stage 2: Runner ---
@@ -37,7 +39,7 @@ RUN npm ci --only=production
 # Copy Frontend Build
 COPY --from=builder /app/dist ./dist
 
-# Copy Backend Build (Compiled JS)
+# Copy Backend Build (Bundled JS)
 COPY --from=builder /app/dist-server ./dist-server
 
 # Copy Entrypoint
