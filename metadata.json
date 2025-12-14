@@ -1,0 +1,5 @@
+{
+  "name": "PlexFlash Manager",
+  "description": "A lightning-fast, local-first web app to scan, search, and analyze your Plex media library using the File System Access API.",
+  "requestFramePermissions": []
+}

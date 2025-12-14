@@ -1,0 +1,13 @@
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - "80:80"
+    volumes:
+      # Mount the host media folder to /media inside the container
+      # CHANGE ./your-media-folder TO YOUR ACTUAL PATH
+      - ./media_example:/media
+    environment:
+      - MEDIA_PATH=/media
+    restart: unless-stopped
