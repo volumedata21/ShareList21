@@ -5,7 +5,8 @@ WORKDIR /app
 
 # Install dependencies
 COPY package*.json ./
-RUN npm ci
+# CHANGED: 'npm ci' -> 'npm install' to fix lockfile mismatch
+RUN npm install
 
 # Copy Source
 COPY . .
@@ -14,10 +15,6 @@ COPY . .
 RUN npm run build
 
 # 2. Build Backend (Esbuild)
-# - --bundle: Combines scanner.ts into server.js/client.js (fixes import errors)
-# - --packages=external: Keeps node_modules external (sqlite3 works better this way)
-# - --format=esm: Outputs modern ES Modules
-# - --platform=node: Optimizes for Node.js
 RUN npx esbuild server.ts client.ts \
     --bundle \
     --platform=node \
@@ -34,7 +31,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package*.json ./
-RUN npm ci --only=production
+# CHANGED: 'npm ci' -> 'npm install'
+RUN npm install --only=production
 
 # Copy Frontend Build
 COPY --from=builder /app/dist ./dist
