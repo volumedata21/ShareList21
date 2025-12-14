@@ -1,0 +1,51 @@
+name: Build and Push Docker Image
+
+on:
+  # TRIGGER 1: Only run when a Release is created and published
+  release:
+    types: [published]
+  
+  # TRIGGER 2: Allow manual button click (helpful for testing/debugging)
+  workflow_dispatch:
+
+env:
+  # CHANGE THIS TO YOUR DOCKER HUB REPO NAME
+  IMAGE_NAME: volumedata21/sharelist21
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # GENERATE TAGS:
+          # 1. semver: Uses the release tag (e.g., v1.0.0)
+          # 2. latest: Always updates the 'latest' tag to match this new release
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

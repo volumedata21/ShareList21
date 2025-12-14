@@ -1,13 +1,18 @@
 services:
-  app:
-    build:
-      context: .
-    ports:
-      - "80:80"
-    volumes:
-      # Mount the host media folder to /media inside the container
-      # CHANGE ./your-media-folder TO YOUR ACTUAL PATH
-      - ./media_example:/media
-    environment:
-      - MEDIA_PATH=/media
+  sharelist-server:
+    image: your-repo/sharelist21:latest
+    container_name: sharelist-server
     restart: unless-stopped
+    ports:
+      - "5021:80"
+    volumes:
+      - ./data:/data
+      # You can add multiple folders
+      - ./media/movies:/media/movies
+#     - ./tv:/media/tv
+    environment:
+      - ROLE=SERVER
+      - APP_USERS=Joe,Lamar,Josh # Add/remove users here
+      - APP_PIN=1234
+      - HOST_USER=Joe  # Enables the server to self-scan /media
+      - MEDIA_ROOT=/media

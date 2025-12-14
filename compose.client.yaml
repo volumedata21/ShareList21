@@ -1,0 +1,14 @@
+services:
+  sharelist-client:
+    image: your-repo/sharelist21:latest
+    container_name: sharelist-client
+    restart: unless-stopped
+    # No ports needed! It's just an outgoing script.
+    volumes:
+      - /c/Users/Lamaar/Movies:/media  # Lamaar's local media
+    environment:
+      - ROLE=CLIENT
+      - CLIENT_USER=Lamaar
+      - SERVER_URL=https://sharelist.joe.com  # URL to Joe's Server
+      - APP_PIN=1234
+      - CRON_SCHEDULE=0 3 * * * # Run at 3am

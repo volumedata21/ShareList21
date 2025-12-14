@@ -1,0 +1,23 @@
+# 1. Don't copy local dependencies. 
+# We want Docker to run 'npm install' fresh inside the container.
+node_modules
+
+# 2. Don't copy the build folder. 
+# We build it fresh inside the container.
+dist
+
+# 3. Don't copy git history (saves space)
+.git
+.gitignore
+
+# 4. CRITICAL: Don't bake your local media into the generic image
+media_example
+
+# 5. Don't copy docker config files into the image itself
+Dockerfile
+compose.yaml
+compose.dev.yaml
+
+# 6. Misc
+.DS_Store
+npm-debug.log
