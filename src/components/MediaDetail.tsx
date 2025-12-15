@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MediaItem, MediaFile } from '../types';
-import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata } from '../utils/mediaUtils';
+import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat } from '../utils/mediaUtils';
 
 interface MediaDetailProps {
   item: MediaItem;
@@ -15,6 +15,7 @@ interface ProcessedFile extends MediaFile {
   is3D?: string | null;
   is4K?: boolean;
   albumName?: string;
+  audioFormat?: string | null; // NEW field
 }
 
 const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
@@ -30,6 +31,8 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         
         const format3D = get3DFormat(file.rawFilename);
         const format4K = get4KFormat(file.rawFilename);
+        // Extract Audio Format (e.g. MP3)
+        const audioFormat = getAudioFormat(file.rawFilename);
 
         let epInfo = {};
         if (item.type === 'TV Show') {
@@ -44,7 +47,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
           }
         }
 
-        // Parse Music Album
         let musicInfo = {};
         if (item.type === 'Music') {
           const meta = getMusicMetadata(file.path);
@@ -57,6 +59,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
           lastModified: modified,
           is3D: format3D,
           is4K: format4K,
+          audioFormat,
           ...epInfo,
           ...musicInfo
         } as ProcessedFile;
@@ -96,8 +99,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     });
 
     const albumCount = Object.keys(albums).length;
-    // Determine Badge Type
-    // If name matches the only album, it's an Album View
     const isAlbumView = albumCount === 1 && item.name === Object.keys(albums)[0];
 
     return (
@@ -133,6 +134,12 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                      <div className="min-w-0 flex-1 pr-4">
                        <div className="text-sm font-medium text-gray-200 truncate">{file.rawFilename}</div>
                        <div className="flex items-center gap-2 mt-1">
+                          {/* Audio Format Badge for Music */}
+                          {file.audioFormat && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-600 text-gray-400">
+                              {file.audioFormat}
+                            </span>
+                          )}
                          <span className="text-[10px] uppercase font-bold text-green-500 bg-green-900/20 px-1.5 py-0.5 rounded">{file.owner}</span>
                          <span className="text-xs text-gray-600 truncate">{file.path}</span>
                        </div>
