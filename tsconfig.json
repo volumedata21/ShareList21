@@ -17,15 +17,15 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": [
-    "src",
-    "types.ts"
+    "src",       // ONLY look at the frontend source folder
+    "types.ts"   // AND the shared types file
   ],
   "exclude": [
     "node_modules", 
     "dist", 
     "dist-server",
-    "server.ts", 
-    "client.ts", 
-    "scanner.ts"
+    "server.ts", // Explicitly ignore backend
+    "client.ts", // Explicitly ignore backend
+    "scanner.ts" // Explicitly ignore backend
   ]
 }
