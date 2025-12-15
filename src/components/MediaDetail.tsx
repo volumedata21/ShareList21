@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MediaItem, MediaFile } from '../types';
-import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString } from '../utils/mediaUtils';
+import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata } from '../utils/mediaUtils';
 
 interface MediaDetailProps {
   item: MediaItem;
@@ -14,6 +14,7 @@ interface ProcessedFile extends MediaFile {
   epTitle?: string;
   is3D?: string | null;
   is4K?: boolean;
+  albumName?: string;
 }
 
 const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
@@ -43,13 +44,21 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
           }
         }
 
+        // Parse Music Album
+        let musicInfo = {};
+        if (item.type === 'Music') {
+          const meta = getMusicMetadata(file.path);
+          musicInfo = { albumName: meta.album };
+        }
+
         return {
           ...file,
           sizeBytes: size,
           lastModified: modified,
           is3D: format3D,
           is4K: format4K,
-          ...epInfo
+          ...epInfo,
+          ...musicInfo
         } as ProcessedFile;
       }));
 
@@ -58,6 +67,10 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
            if (item.type === 'TV Show') {
              if (a.epSeason !== b.epSeason) return (a.epSeason || 0) - (b.epSeason || 0);
              if (a.epNumber !== b.epNumber) return (a.epNumber || 0) - (b.epNumber || 0);
+           }
+           if (item.type === 'Music') {
+             if (a.albumName !== b.albumName) return (a.albumName || '').localeCompare(b.albumName || '');
+             return a.rawFilename.localeCompare(b.rawFilename);
            }
            return a.owner.localeCompare(b.owner);
         });
@@ -73,6 +86,71 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
   const uniqueOwners = Array.from(new Set(item.files.map(f => f.owner))).sort();
 
+  // --- MUSIC RENDER LOGIC ---
+  if (item.type === 'Music') {
+    const albums: Record<string, ProcessedFile[]> = {};
+    loadedFiles.forEach(f => {
+      const alb = f.albumName || 'Unknown Album';
+      if (!albums[alb]) albums[alb] = [];
+      albums[alb].push(f);
+    });
+
+    const albumCount = Object.keys(albums).length;
+    // Determine Badge Type
+    // If name matches the only album, it's an Album View
+    const isAlbumView = albumCount === 1 && item.name === Object.keys(albums)[0];
+
+    return (
+      <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
+        <div className="p-6 border-b border-gray-700 flex justify-between items-start sticky top-0 bg-gray-800 z-10 shadow-md">
+          <div className="flex-1 mr-4">
+            <h2 className="text-2xl font-bold text-white break-words leading-tight">{item.name}</h2>
+            <div className="flex gap-2 mt-3 items-center">
+              <span className="px-2 py-0.5 bg-plex-orange text-black text-xs font-bold rounded uppercase tracking-wider">
+                {isAlbumView ? 'Music Album' : 'Music Artist'}
+              </span>
+              {!isAlbumView && (
+                 <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs font-bold rounded">{albumCount} Albums</span>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors bg-gray-700/50 p-2 rounded-full">
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+
+        <div className="p-6 space-y-8">
+           {Object.keys(albums).sort().map(albumName => (
+             <div key={albumName} className="space-y-3">
+               <h3 className="text-lg font-bold text-gray-300 border-b border-gray-700 pb-2 flex items-center gap-2">
+                 <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+                 {albumName}
+               </h3>
+               
+               <div className="space-y-2">
+                 {albums[albumName].map(file => (
+                   <div key={file.id || file.path} className="flex items-center justify-between bg-gray-900/50 p-3 rounded border border-gray-800 hover:border-gray-600 transition-colors">
+                     <div className="min-w-0 flex-1 pr-4">
+                       <div className="text-sm font-medium text-gray-200 truncate">{file.rawFilename}</div>
+                       <div className="flex items-center gap-2 mt-1">
+                         <span className="text-[10px] uppercase font-bold text-green-500 bg-green-900/20 px-1.5 py-0.5 rounded">{file.owner}</span>
+                         <span className="text-xs text-gray-600 truncate">{file.path}</span>
+                       </div>
+                     </div>
+                     <div className="text-xs font-mono text-gray-500">
+                       {formatBytes(file.sizeBytes)}
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             </div>
+           ))}
+        </div>
+      </div>
+    );
+  }
+
+  // --- STANDARD RENDER LOGIC ---
   return (
     <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
       <div className="p-6 border-b border-gray-700 flex justify-between items-start sticky top-0 bg-gray-800 z-10 shadow-md">
@@ -87,17 +165,13 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
             </span>
           </div>
         </div>
-        <button 
-          onClick={onClose}
-          className="text-gray-400 hover:text-white transition-colors bg-gray-700/50 p-2 rounded-full"
-        >
-          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
+        <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors bg-gray-700/50 p-2 rounded-full">
+          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
 
       <div className="p-6 space-y-8">
+        
         <section>
            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
@@ -158,21 +232,18 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                 <div className="p-4 flex flex-col gap-3">
                   <div className="flex items-center gap-2">
                     
-                    {/* GOLD 4K BADGE */}
                     {file.is4K && (
                       <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange shadow-[0_0_8px_rgba(229,160,13,0.3)]">
                         4K UHD
                       </span>
                     )}
 
-                    {/* 3D BADGE */}
                     {file.is3D && (
                       <span className="text-xs font-bold px-2 py-0.5 rounded border border-blue-400 text-blue-300 bg-blue-900/20 shadow-[0_0_8px_rgba(96,165,250,0.1)]">
                         {file.is3D}
                       </span>
                     )}
 
-                    {/* Generic Quality Badge (Filtered: hidden if it's 4K) */}
                     {file.quality && !is4KQualityString(file.quality) && (
                       <span className="text-xs font-bold px-2 py-0.5 rounded border border-gray-600 text-gray-400">
                         {file.quality}
