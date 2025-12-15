@@ -8,70 +8,51 @@ export const formatBytes = (bytes: number, decimals = 2): string => {
 };
 
 export const getMediaType = (path: string, filename: string): 'Movie' | 'TV Show' | 'Music' | 'Unknown' => {
-  // Normalize path separators to forward slashes for consistency
   const normalizedPath = path.toLowerCase().replace(/\\/g, '/');
   const parts = normalizedPath.split('/');
   const lowerName = filename.toLowerCase();
 
-  // Definition of File Extensions
   const isAudio = /\.(mp3|flac|wav|m4a|aac|ogg|wma|alac|aiff|ape|opus)$/.test(lowerName);
   const isVideo = /\.(mkv|mp4|avi|mov|wmv|m4v|ts|iso)$/.test(lowerName);
 
-  // 1. STRICT MUSIC CHECK
-  // Rule: Must be in a folder named explicitly "music" AND be an audio file.
-  // This prevents "/Movies/The Sound of Music/" from matching, because "the sound of music" != "music"
   if (parts.includes('music') && isAudio) {
     return 'Music';
   }
 
-  // 2. TV Show Check
-  // Check for 'tv' or 'shows' folder + Video file
   if ((parts.includes('tv') || parts.includes('shows')) && isVideo) {
     return 'TV Show';
   }
 
-  // 3. Movie Check
-  // Check for 'movies' folder + Video file
   if (parts.includes('movies') && isVideo) {
     return 'Movie';
   }
 
-  // 4. Fallback for loose video files (outside specific folders)
   if (isVideo) {
-     // S01E01 pattern implies TV Show even if folder structure is weird
      if (/s\d{2}e\d{2}/.test(lowerName)) return 'TV Show';
      return 'Movie';
   }
   
-  // Note: We return 'Unknown' for loose Audio files not in a 'Music' folder
-  // to adhere to your strict rule #1.
   return 'Unknown';
 };
 
-// NEW: Helper to extract Artist/Album from path
-// Assumes structure: .../Music/Artist Name/Album Name/Song.mp3
 export const getMusicMetadata = (path: string) => {
   const normalizedPath = path.replace(/\\/g, '/');
   const parts = normalizedPath.split('/');
   
-  // Find the 'music' folder index (case insensitive)
   const musicIdx = parts.findIndex(p => p.toLowerCase() === 'music');
   
   if (musicIdx !== -1 && musicIdx + 2 < parts.length) {
-    // Standard Structure: Music -> Artist -> Album -> File
     return {
       artist: parts[musicIdx + 1],
       album: parts[musicIdx + 2]
     };
   } else if (musicIdx !== -1 && musicIdx + 1 < parts.length) {
-     // Flat Artist Structure: Music -> Artist -> File
      return {
        artist: parts[musicIdx + 1],
        album: 'Unknown Album'
      };
   }
   
-  // Fallback
   return { artist: 'Unknown Artist', album: 'Unknown Album' };
 };
 
@@ -132,8 +113,14 @@ export const cleanName = (filename: string): string => {
   return name;
 };
 
+// UPDATED: Now supports multi-word "AND" matching
 export const fuzzyMatch = (text: string, query: string): boolean => {
-  return text.toLowerCase().includes(query.toLowerCase());
+  const lowerText = text.toLowerCase();
+  // Split by spaces, filter out empty strings
+  const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+  
+  // Return true only if EVERY term is present in the text
+  return terms.every(term => lowerText.includes(term));
 };
 
 export const getSeriesName = (filename: string): string | null => {
