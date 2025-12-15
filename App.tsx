@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MediaItem, MediaFile, FilterType, AppConfig } from './types';
-import { fuzzyMatch, cleanName, getMediaType, getSeriesName } from './utils/mediaUtils';
+import { fuzzyMatch, cleanName, getMediaType, getSeriesName } from './src/utils/mediaUtils';
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
 

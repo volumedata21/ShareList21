@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, MediaFile } from '../types';
-import { formatBytes, parseEpisodeInfo, getEpisodeTitle } from '../utils/mediaUtils';
+import { formatBytes, parseEpisodeInfo, getEpisodeTitle } from '../src/utils/mediaUtils';
 
 interface MediaDetailProps {
   item: MediaItem;

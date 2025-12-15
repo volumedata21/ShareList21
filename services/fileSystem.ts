@@ -1,5 +1,5 @@
 import { MediaFile } from '../types';
-import { isMediaFile, parseQuality, parseLibraryName } from '../utils/mediaUtils';
+import { isMediaFile, parseQuality, parseLibraryName } from '../src/utils/mediaUtils';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 

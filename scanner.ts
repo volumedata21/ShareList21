@@ -2,22 +2,27 @@ import fs from 'fs/promises';
 import path from 'path';
 import { MediaFile } from './types';
 
-// Only allow these extensions. 
-// Images (jpg, png) and metadata (nfo, xml) are naturally ignored because they aren't in this list.
+// Expanded Audio/Video Extensions
 const VALID_EXTS = new Set([
-  '.mkv', '.mp4', '.avi', '.mov', '.wmv', 
-  '.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.wma'
+  // Video
+  '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.iso', '.ts', '.m4v',
+  // Audio
+  '.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.wma', '.alac', '.aiff', '.ape', '.opus'
 ]);
 
-// Folders to completely skip recursion
-const IGNORED_FOLDERS = new Set([
+// Ignored Folder Names (Normalized: lowercase, no spaces/hyphens)
+// REMOVED: 'other', 'scenes', 'shorts', 'trailers' (Too aggressive)
+const IGNORED_TERMS = new Set([
   'extras', 
-  'featurettes', 
   'specials', 
-  'season 00', 
-  'season 0',
-  'sample',
-  'samples'
+  'season00', 
+  'season0', 
+  'sample', 
+  'samples',
+  'behindthescenes',
+  'deletedscenes',
+  'featurettes',
+  'interviews'
 ]);
 
 async function scanDirectory(dir: string): Promise<string[]> {
@@ -27,26 +32,26 @@ async function scanDirectory(dir: string): Promise<string[]> {
     
     for (const dirent of dirents) {
       const name = dirent.name;
-      const lowerName = name.toLowerCase();
-
-      // 1. Ignore Hidden Files/Folders (starts with . or _)
+      
+      // 1. HIDDEN FILE CHECK (._, .DS_Store, etc)
       if (name.startsWith('.') || name.startsWith('_')) continue;
 
       const res = path.resolve(dir, name);
 
       if (dirent.isDirectory()) {
-        // 2. Ignore Extras / Specials / Season 00
-        if (IGNORED_FOLDERS.has(lowerName)) continue;
+        // 2. EXTRAS FOLDER CHECK
+        // Normalize: "Deleted Scenes" -> "deletedscenes"
+        const normalized = name.toLowerCase().replace(/[\s\-_]/g, '');
+        
+        if (IGNORED_TERMS.has(normalized)) continue;
 
-        // Recursively scan subdirectories
         results = results.concat(await scanDirectory(res));
       } else {
-        // 3. Extension Check
+        // 3. EXTENSION CHECK
         const ext = path.extname(res).toLowerCase();
         if (VALID_EXTS.has(ext)) {
-          // Check for "Sample" files that might be loose in a folder
-          if (lowerName.includes('sample') && (await fs.stat(res)).size < 50 * 1024 * 1024) {
-             // Skip if filename contains "sample" and is < 50MB
+          // Skip small "sample" files (likely junk from downloads)
+          if (name.toLowerCase().includes('sample') && (await fs.stat(res)).size < 50 * 1024 * 1024) {
              continue;
           }
           results.push(res);
@@ -62,10 +67,8 @@ async function scanDirectory(dir: string): Promise<string[]> {
 export async function processFiles(mediaRoot: string, owner: string): Promise<MediaFile[]> {
   console.log(`[Scanner] Starting scan of ${mediaRoot} for user ${owner}...`);
   
-  // Get all valid file paths first
   const filePaths = await scanDirectory(mediaRoot);
   
-  // Process stats in parallel
   const processed = await Promise.all(filePaths.map(async (filePath) => {
     try {
       const stats = await fs.stat(filePath);
@@ -74,8 +77,8 @@ export async function processFiles(mediaRoot: string, owner: string): Promise<Me
       const file: MediaFile = {
         rawFilename: path.basename(filePath),
         path: relativePath,
+        // Grab the first folder name as the "Library" (e.g., "Movies", "Music")
         library: relativePath.split(path.sep)[0] || 'Root',
-        // Simple regex for quality detection
         quality: path.basename(filePath).match(/4k|2160p|1080p|720p|sd/i)?.[0] || null,
         owner: owner,
         sizeBytes: stats.size,
