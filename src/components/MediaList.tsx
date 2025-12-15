@@ -1,6 +1,6 @@
 import React from 'react';
 import { MediaItem } from '../types';
-import { get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata } from '../utils/mediaUtils';
+import { get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat } from '../utils/mediaUtils';
 
 interface MediaListProps {
   items: MediaItem[];
@@ -47,16 +47,20 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
         
         const is4K = item.files.some(f => get4KFormat(f.rawFilename));
         
+        // CHANGED: Logic for determining badge text
         const qualities = Array.from(new Set(
           item.files
-            .map(f => f.quality)
+            .map(f => {
+               // For Music, always ignore the generic quality field and grab extension
+               if (item.type === 'Music') return getAudioFormat(f.rawFilename);
+               return f.quality;
+            })
             .filter((q): q is string => Boolean(q) && !is4KQualityString(q))
         )).slice(0, 3);
         
         const owners = Array.from(new Set(item.files.map(f => f.owner))).sort().join(', ');
         const is3D = item.files.some(f => get3DFormat(f.rawFilename));
 
-        // Determine Music Type
         let albumCount = 0;
         let isAlbumView = false;
         let artistName = "";
@@ -68,7 +72,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
           const firstAlbum = albums.values().next().value;
           if (albumCount === 1 && item.name === firstAlbum) {
              isAlbumView = true;
-             // Extract artist from the first file for display
              artistName = getMusicMetadata(item.files[0].path).artist;
           }
         }
@@ -90,7 +93,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             <div className="flex-1 min-w-0">
               <h3 className="text-sm font-semibold truncate flex items-center gap-2">
                 <span>{item.name}</span>
-                {/* NEW: Display Artist Name for Albums */}
                 {isAlbumView && (
                   <span className={`text-xs font-normal ${selectedId === item.id ? 'text-white/70' : 'text-gray-500'}`}>
                     by {artistName}
@@ -146,6 +148,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 </span>
               ))}
               
+              {/* Only show STD if we have no special badges and no qualities */}
               {qualities.length === 0 && !is3D && !is4K && (
                  <span className={`text-[9px] px-1.5 py-0.5 rounded border 
                  ${selectedId === item.id ? 'border-white/20' : 'border-gray-700 text-gray-600'}`}>
