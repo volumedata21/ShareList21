@@ -13,6 +13,11 @@ const App: React.FC = () => {
   const [activePin, setActivePin] = useState(() => sessionStorage.getItem('pf_pin') || '');
   const [isLocked, setIsLocked] = useState(true);
   const [authError, setAuthError] = useState(false);
+
+  // --- Lockout State ---
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [lockoutEnds, setLockoutEnds] = useState<number | null>(null);
+  const [timeLeft, setTimeLeft] = useState(0);
   
   // --- App Data ---
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -47,6 +52,25 @@ const App: React.FC = () => {
   };
 
 
+  // --- LOCKOUT TIMER ---
+  useEffect(() => {
+    let timer: any;
+    if (lockoutEnds) {
+      timer = setInterval(() => {
+        const remaining = Math.ceil((lockoutEnds - Date.now()) / 1000);
+        if (remaining <= 0) {
+          setLockoutEnds(null);
+          setFailedAttempts(0);
+          setTimeLeft(0);
+        } else {
+          setTimeLeft(remaining);
+        }
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [lockoutEnds]);
+
+
   // --- INITIAL LOAD & AUTH ---
   useEffect(() => {
     fetch('/api/config')
@@ -77,20 +101,42 @@ const App: React.FC = () => {
 
   // 2. Fetch/Unlock
   const refreshData = async (pinToUse: string) => {
+    if (lockoutEnds && Date.now() < lockoutEnds) return; // Prevent request if locked
+
     setLoading(true);
     setAuthError(false);
     try {
       const res = await fetch('/api/files', { headers: { 'x-app-pin': pinToUse } });
+      
       if (res.status === 401) {
         setAuthError(true);
         setIsLocked(true);
         setLoading(false);
+
+        // --- NEW LOCKOUT LOGIC ---
+        const newFailures = failedAttempts + 1;
+        setFailedAttempts(newFailures);
+        
+        // Lockout after 5 failed attempts
+        if (newFailures >= 5) {
+          const duration = 30 * 1000; // 30 Seconds
+          const end = Date.now() + duration;
+          setLockoutEnds(end);
+          setTimeLeft(30);
+          setPinInput(''); // Clear input
+        }
+        // -------------------------
+
         throw new Error("Invalid PIN");
       }
       if (!res.ok) throw new Error(`Server Error: ${res.status}`);
       
       const files: MediaFile[] = await res.json();
       
+      // Reset lockout on success
+      setFailedAttempts(0);
+      setLockoutEnds(null);
+
       if (Array.isArray(files)) {
         setMediaItems(groupMediaFiles(files));
       } else {
@@ -278,6 +324,8 @@ const App: React.FC = () => {
   }
 
   if (isLocked) {
+    const isLockedOut = !!lockoutEnds;
+
     return (
       <div className="h-screen bg-gray-900 flex items-center justify-center text-white p-4">
         <div className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
@@ -288,10 +336,38 @@ const App: React.FC = () => {
           <div className="p-6 space-y-4">
              <div className="space-y-1">
                <label className="text-xs font-bold uppercase text-gray-400 tracking-wider ml-1">Application PIN</label>
-               <input type="password" value={pinInput} onChange={(e) => { setPinInput(e.target.value); setAuthError(false); }} onKeyDown={(e) => e.key === 'Enter' && handleUnlock()} placeholder="••••" autoFocus className={`w-full bg-gray-900 border rounded p-3 text-white focus:outline-none transition-colors text-center font-mono text-lg ${authError ? 'border-red-500 text-red-200' : 'border-gray-600 focus:border-plex-orange'}`} />
-               {authError && <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">Access Denied</p>}
+               
+               <input 
+                 type="password" 
+                 value={pinInput} 
+                 onChange={(e) => { setPinInput(e.target.value); setAuthError(false); }} 
+                 onKeyDown={(e) => e.key === 'Enter' && !isLockedOut && handleUnlock()} 
+                 placeholder={isLockedOut ? `Locked: ${timeLeft}s` : "••••••••"} 
+                 autoFocus 
+                 disabled={isLockedOut}
+                 className={`w-full bg-gray-900 border rounded p-3 text-white placeholder:text-gray-700 focus:outline-none transition-colors text-center font-mono text-lg 
+                   ${isLockedOut ? 'border-red-900 bg-red-900/10 text-red-400 cursor-not-allowed placeholder:text-red-500/50' : 
+                     authError ? 'border-red-500 text-red-200' : 'border-gray-600 focus:border-plex-orange'}`} 
+               />
+               
+               {isLockedOut ? (
+                 <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">
+                   Too many attempts. Wait {timeLeft}s.
+                 </p>
+               ) : authError && (
+                 <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">
+                   Access Denied {failedAttempts > 0 && `(${failedAttempts}/5)`}
+                 </p>
+               )}
              </div>
-             <button onClick={handleUnlock} disabled={loading || !pinInput} className="w-full bg-plex-orange hover:bg-yellow-600 text-black font-bold py-3 rounded shadow-lg">Unlock</button>
+             <button 
+               onClick={handleUnlock} 
+               disabled={loading || !pinInput || isLockedOut} 
+               className={`w-full font-bold py-3 rounded shadow-lg transition-colors
+                 ${isLockedOut || !pinInput ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-plex-orange hover:bg-yellow-600 text-black'}`}
+             >
+               {isLockedOut ? 'Locked' : 'Unlock'}
+             </button>
           </div>
         </div>
       </div>
