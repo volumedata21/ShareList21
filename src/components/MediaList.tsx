@@ -1,6 +1,6 @@
 import React from 'react';
 import { MediaItem } from '../types';
-import { get3DFormat, get4KFormat, is4KQualityString } from '../utils/mediaUtils';
+import { get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata } from '../utils/mediaUtils';
 
 interface MediaListProps {
   items: MediaItem[];
@@ -8,7 +8,7 @@ interface MediaListProps {
   selectedId?: string;
 }
 
-const getIcon = (type: string) => {
+const getIcon = (type: string, isAlbum = false) => {
   switch (type) {
     case 'Movie': return (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>
@@ -16,9 +16,15 @@ const getIcon = (type: string) => {
     case 'TV Show': return (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
     );
-    case 'Music': return (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
-    );
+    case 'Music': 
+      if (isAlbum) {
+        return (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+        );
+      }
+      return (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+      );
     default: return (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
     );
@@ -39,10 +45,8 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
       {items.map((item) => {
         const versionCount = item.files.length;
         
-        // Detect 4K via filename
         const is4K = item.files.some(f => get4KFormat(f.rawFilename));
-
-        // Filter out "4K" from the quality strings if we are already showing the badge
+        
         const qualities = Array.from(new Set(
           item.files
             .map(f => f.quality)
@@ -51,6 +55,23 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
         
         const owners = Array.from(new Set(item.files.map(f => f.owner))).sort().join(', ');
         const is3D = item.files.some(f => get3DFormat(f.rawFilename));
+
+        // Determine Music Type
+        let albumCount = 0;
+        let isAlbumView = false;
+        let artistName = "";
+        
+        if (item.type === 'Music') {
+          const albums = new Set(item.files.map(f => getMusicMetadata(f.path).album));
+          albumCount = albums.size;
+          
+          const firstAlbum = albums.values().next().value;
+          if (albumCount === 1 && item.name === firstAlbum) {
+             isAlbumView = true;
+             // Extract artist from the first file for display
+             artistName = getMusicMetadata(item.files[0].path).artist;
+          }
+        }
 
         return (
           <button
@@ -63,12 +84,18 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
               }`}
           >
             <div className={`p-2 rounded-full mr-4 ${selectedId === item.id ? 'bg-white/20' : 'bg-gray-700 group-hover:bg-gray-600'}`}>
-              {getIcon(item.type)}
+              {getIcon(item.type, isAlbumView)}
             </div>
             
             <div className="flex-1 min-w-0">
               <h3 className="text-sm font-semibold truncate flex items-center gap-2">
-                {item.name}
+                <span>{item.name}</span>
+                {/* NEW: Display Artist Name for Albums */}
+                {isAlbumView && (
+                  <span className={`text-xs font-normal ${selectedId === item.id ? 'text-white/70' : 'text-gray-500'}`}>
+                    by {artistName}
+                  </span>
+                )}
               </h3>
               
               <div className="flex items-center gap-1 mt-0.5">
@@ -85,14 +112,16 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 {item.type === 'TV Show' && (
                    <span>• {versionCount} Ep/Files</span>
                 )}
-                {item.type !== 'TV Show' && versionCount > 1 && (
+                {item.type === 'Music' && (
+                   <span>• {isAlbumView ? 'Album' : `${albumCount} Albums`}</span>
+                )}
+                {item.type !== 'TV Show' && item.type !== 'Music' && versionCount > 1 && (
                   <span className="font-bold">• {versionCount} Versions</span>
                 )}
               </p>
             </div>
 
             <div className="flex flex-row items-center ml-2 gap-1">
-              {/* GOLD 4K BADGE */}
               {is4K && (
                 <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap
                   ${selectedId === item.id 
@@ -103,7 +132,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 </span>
               )}
 
-              {/* 3D BADGE */}
               {is3D && (
                 <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap
                   ${selectedId === item.id ? 'border-blue-300 bg-blue-500/50 text-white' : 'border-blue-500 text-blue-400 bg-blue-900/30'}`}>
@@ -111,7 +139,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 </span>
               )}
 
-              {/* Other Qualities (excluding 4K strings) */}
               {qualities.map((q, i) => (
                 <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap
                   ${selectedId === item.id ? 'border-white/40 bg-white/10' : 'border-gray-600 bg-gray-700 text-gray-400'}`}>

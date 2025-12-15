@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, MediaFile, FilterType, AppConfig } from './types';
-import { fuzzyMatch, cleanName, getMediaType, getSeriesName } from './utils/mediaUtils';
+import { fuzzyMatch, cleanName, getMediaType, getSeriesName, getMusicMetadata } from './utils/mediaUtils';
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
-import SettingsModal from './components/SettingsModal'; // Assuming this exists or is part of standard imports
 
 const App: React.FC = () => {
   // --- Auth & Config ---
@@ -25,10 +24,8 @@ const App: React.FC = () => {
 
   // --- HISTORY & NAVIGATION HANDLERS ---
   
-  // 1. Listen for Browser Back Button
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
-      // Whenever the user hits "Back", we close the modal
       setSelectedItem(null);
     };
 
@@ -36,11 +33,7 @@ const App: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // 2. Handle Item Selection (Push History)
   const handleSelectMedia = (item: MediaItem) => {
-    // If we are already viewing an item (e.g. split screen), replace the history state
-    // so we don't build a huge stack of items to press "Back" through.
-    // If starting from list, push a new state.
     if (selectedItem) {
       window.history.replaceState({ itemId: item.id }, '', '');
     } else {
@@ -49,10 +42,7 @@ const App: React.FC = () => {
     setSelectedItem(item);
   };
 
-  // 3. Handle Manual Close (Pop History)
   const handleCloseMedia = () => {
-    // Manually triggering "Back" removes the history state we pushed.
-    // This fires the 'popstate' event above, which sets selectedItem(null).
     window.history.back();
   };
 
@@ -101,7 +91,6 @@ const App: React.FC = () => {
       
       const files: MediaFile[] = await res.json();
       
-      // Safety: Ensure we actually got an array
       if (Array.isArray(files)) {
         setMediaItems(groupMediaFiles(files));
       } else {
@@ -133,12 +122,27 @@ const App: React.FC = () => {
     
     files.forEach(file => {
       try {
-        // Safety: handle missing filename
         if (!file.rawFilename) return;
 
         let name = cleanName(file.rawFilename);
         const type = getMediaType(file.path, file.rawFilename);
         
+        if (type === 'Music') {
+          const { artist } = getMusicMetadata(file.path);
+          const key = `Music:${artist.toLowerCase()}`;
+          
+          if (!map.has(key)) {
+            map.set(key, { 
+              id: key, 
+              name: artist, 
+              type: 'Music', 
+              files: [] 
+            });
+          }
+          map.get(key)!.files.push(file);
+          return;
+        }
+
         if (type === 'TV Show') {
           const series = getSeriesName(file.rawFilename);
           if (series) name = series;
@@ -197,6 +201,69 @@ const App: React.FC = () => {
     }
   };
 
+  // --- FILTER & SEARCH LOGIC ---
+  const filteredItems = useMemo(() => {
+    const results: MediaItem[] = [];
+
+    mediaItems.forEach(item => {
+      // 1. Filter by Tab
+      if (activeFilter !== 'All' && item.type !== activeFilter) return;
+
+      // 2. If no search, just pass item through
+      if (!searchQuery) {
+        results.push(item);
+        return;
+      }
+
+      // 3. Search Logic
+      // Special handling for Music to show Albums
+      if (item.type === 'Music') {
+        // A. Match Artist Name
+        if (fuzzyMatch(item.name, searchQuery)) {
+          results.push(item);
+        }
+
+        // B. Group by Album & Check for Matches (Album Name OR Track Name)
+        const albumMap = new Map<string, MediaFile[]>();
+        item.files.forEach(f => {
+          const { album } = getMusicMetadata(f.path);
+          if (!albumMap.has(album)) albumMap.set(album, []);
+          albumMap.get(album)!.push(f);
+        });
+
+        albumMap.forEach((files, albumName) => {
+          // Check 1: Does Album Name match?
+          const matchAlbum = fuzzyMatch(albumName, searchQuery);
+          // Check 2: Do any Tracks inside match?
+          const matchTrack = files.some(f => fuzzyMatch(f.rawFilename, searchQuery));
+
+          if (matchAlbum || matchTrack) {
+            // Create a specific item for this album
+            results.push({
+              id: `${item.id}:album:${albumName}`,
+              name: albumName,
+              type: 'Music',
+              files: files
+            });
+          }
+        });
+        return;
+      }
+
+      // Standard Logic (Movies/TV)
+      if (fuzzyMatch(item.name, searchQuery)) {
+        results.push(item);
+        return;
+      }
+      if (item.files.some(f => fuzzyMatch(f.path, searchQuery))) {
+        results.push(item);
+      }
+    });
+
+    return results;
+  }, [mediaItems, searchQuery, activeFilter]);
+
+
   // --- RENDER ---
 
   if (configLoading) {
@@ -231,12 +298,6 @@ const App: React.FC = () => {
     );
   }
 
-  const filteredItems = mediaItems.filter(item => {
-    if (activeFilter !== 'All' && item.type !== activeFilter) return false;
-    if (searchQuery && !fuzzyMatch(item.name, searchQuery)) return false;
-    return true;
-  });
-
   return (
     <div className="h-full flex flex-col md:flex-row bg-gray-900 text-gray-100 overflow-hidden relative">
       
@@ -269,7 +330,6 @@ const App: React.FC = () => {
         </header>
         {statusMsg && <div className="bg-blue-900/30 text-blue-200 text-xs p-2 text-center">{statusMsg}</div>}
         
-        {/* Pass filteredItems to MediaList, use handleSelectMedia */}
         <MediaList items={filteredItems} onSelect={handleSelectMedia} selectedId={selectedItem?.id} />
       </div>
 
