@@ -8,21 +8,71 @@ export const formatBytes = (bytes: number, decimals = 2): string => {
 };
 
 export const getMediaType = (path: string, filename: string): 'Movie' | 'TV Show' | 'Music' | 'Unknown' => {
-  const lowerPath = path.toLowerCase();
+  // Normalize path separators to forward slashes for consistency
+  const normalizedPath = path.toLowerCase().replace(/\\/g, '/');
+  const parts = normalizedPath.split('/');
   const lowerName = filename.toLowerCase();
-  
-  if (lowerPath.includes('/music/') || lowerPath.startsWith('music/')) return 'Music';
-  if (lowerPath.includes('/tv/') || lowerPath.includes('/shows/') || lowerPath.startsWith('tv/')) return 'TV Show';
-  if (lowerPath.includes('/movies/') || lowerPath.startsWith('movies/')) return 'Movie';
 
-  if (/\.(mp3|flac|wav|m4a|aac|ogg|wma|alac|aiff|ape|opus)$/.test(lowerName)) return 'Music';
-  
-  if (/\.(mkv|mp4|avi|mov|wmv|m4v|ts|iso)$/.test(lowerName)) {
-     if (/s\d{2}e\d{2}/.test(lowerName) || lowerPath.includes('season')) return 'TV Show';
+  // Definition of File Extensions
+  const isAudio = /\.(mp3|flac|wav|m4a|aac|ogg|wma|alac|aiff|ape|opus)$/.test(lowerName);
+  const isVideo = /\.(mkv|mp4|avi|mov|wmv|m4v|ts|iso)$/.test(lowerName);
+
+  // 1. STRICT MUSIC CHECK
+  // Rule: Must be in a folder named explicitly "music" AND be an audio file.
+  // This prevents "/Movies/The Sound of Music/" from matching, because "the sound of music" != "music"
+  if (parts.includes('music') && isAudio) {
+    return 'Music';
+  }
+
+  // 2. TV Show Check
+  // Check for 'tv' or 'shows' folder + Video file
+  if ((parts.includes('tv') || parts.includes('shows')) && isVideo) {
+    return 'TV Show';
+  }
+
+  // 3. Movie Check
+  // Check for 'movies' folder + Video file
+  if (parts.includes('movies') && isVideo) {
+    return 'Movie';
+  }
+
+  // 4. Fallback for loose video files (outside specific folders)
+  if (isVideo) {
+     // S01E01 pattern implies TV Show even if folder structure is weird
+     if (/s\d{2}e\d{2}/.test(lowerName)) return 'TV Show';
      return 'Movie';
   }
   
+  // Note: We return 'Unknown' for loose Audio files not in a 'Music' folder
+  // to adhere to your strict rule #1.
   return 'Unknown';
+};
+
+// NEW: Helper to extract Artist/Album from path
+// Assumes structure: .../Music/Artist Name/Album Name/Song.mp3
+export const getMusicMetadata = (path: string) => {
+  const normalizedPath = path.replace(/\\/g, '/');
+  const parts = normalizedPath.split('/');
+  
+  // Find the 'music' folder index (case insensitive)
+  const musicIdx = parts.findIndex(p => p.toLowerCase() === 'music');
+  
+  if (musicIdx !== -1 && musicIdx + 2 < parts.length) {
+    // Standard Structure: Music -> Artist -> Album -> File
+    return {
+      artist: parts[musicIdx + 1],
+      album: parts[musicIdx + 2]
+    };
+  } else if (musicIdx !== -1 && musicIdx + 1 < parts.length) {
+     // Flat Artist Structure: Music -> Artist -> File
+     return {
+       artist: parts[musicIdx + 1],
+       album: 'Unknown Album'
+     };
+  }
+  
+  // Fallback
+  return { artist: 'Unknown Artist', album: 'Unknown Album' };
 };
 
 export const get3DFormat = (filename: string): string | null => {
@@ -48,24 +98,15 @@ export const cleanName = (filename: string): string => {
   let name = filename;
   let editionText = "";
 
-  // 1. Extract {edition-...} BEFORE cleaning
-  // Matches "{edition-Director's Cut}" and captures "Director's Cut"
   const editionMatch = name.match(/\{edition-(.+?)\}/i);
   if (editionMatch) {
     editionText = editionMatch[1].trim(); 
-    // Remove the tag from the name so it doesn't get garbled by later regex
     name = name.replace(editionMatch[0], ""); 
   }
 
-  // 2. Remove Extension
   name = name.replace(/\.[^/.]+$/, "");
-
-  // 3. Replace dots/underscores with spaces
   name = name.replace(/[._]/g, " ");
 
-  // 4. Remove common release tags
-  // Note: We leave 'cut', 'extended' etc. in this list so normal filenames get cleaned,
-  // but since we extracted 'editionText' separately above, it remains safe.
   const tagsToRemove = [
     '4k', '2160p', '1080p', '720p', '480p', 'sd',
     'bluray', 'web-dl', 'webrip', 'dvdrip', 'hdr', 'dv',
@@ -78,17 +119,12 @@ export const cleanName = (filename: string): string => {
   name = name.replace(tagRegex, '');
   
   name = name.replace(/(\.sbs|\.hou)/gi, '');
-  
-  // Fix "Name (Year) - " Pattern
   name = name.replace(/(\(\d{4}\))\s*-\s*$/, '$1');
-  
-  // General Cleanup
   name = name.replace(/\s*-\s*$/, '');
   name = name.replace(/\s{2,}/g, ' ');
 
   name = name.trim();
 
-  // 5. Append Edition Text if it existed
   if (editionText) {
     name = `${name} - ${editionText}`;
   }
