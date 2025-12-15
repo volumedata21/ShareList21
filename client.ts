@@ -4,12 +4,13 @@ import cron from 'node-cron';
 // Env Variables with Type Safety
 const SERVER_URL = process.env.SERVER_URL || '';
 const USERNAME = process.env.CLIENT_USER || '';
-const PIN = process.env.APP_PIN || '';
+// CHANGED: Use SYNC_SECRET instead of PIN
+const SYNC_SECRET = process.env.SYNC_SECRET || ''; 
 const MEDIA_PATH = '/media';
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '0 3 * * *';
 
-if (!SERVER_URL || !USERNAME) {
-  console.error("ERROR: Missing SERVER_URL or CLIENT_USER env variables.");
+if (!SERVER_URL || !USERNAME || !SYNC_SECRET) {
+  console.error("ERROR: Missing SERVER_URL, CLIENT_USER, or SYNC_SECRET env variables.");
   process.exit(1);
 }
 
@@ -24,7 +25,8 @@ async function runClientScan() {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-app-pin': PIN
+        // CHANGED: Send Secret Header
+        'x-sync-secret': SYNC_SECRET
       },
       body: JSON.stringify({ owner: USERNAME, files })
     });
