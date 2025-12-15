@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MediaItem, MediaFile } from '../types';
-import { formatBytes, parseEpisodeInfo, getEpisodeTitle } from '../src/utils/mediaUtils';
+// FIX: Changed '../src/utils/mediaUtils' to '../utils/mediaUtils'
+import { formatBytes, parseEpisodeInfo, getEpisodeTitle } from '../utils/mediaUtils';
 
 interface MediaDetailProps {
   item: MediaItem;
@@ -12,6 +13,8 @@ interface ProcessedFile extends MediaFile {
   epNumber?: number;
   epFull?: string; // S01E01
   epTitle?: string;
+  // Added optional handle for types compatibility, though we aren't using browser handles anymore
+  handle?: any; 
 }
 
 const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
@@ -25,17 +28,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
       const updatedFiles = await Promise.all(item.files.map(async (file) => {
         let size = file.sizeBytes;
         let modified = file.lastModified;
-
-        // Only try to load from handle if stats missing AND handle exists (Local Browser Mode)
-        if (size === undefined && file.handle) {
-          try {
-            const fileObj = await file.handle.getFile();
-            size = fileObj.size;
-            modified = fileObj.lastModified;
-          } catch (e) {
-            console.error("Error stats for", file.rawFilename);
-          }
-        }
 
         // Parse Episode Info if TV Show
         let epInfo = {};
@@ -63,9 +55,11 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         // Sort files
         const sorted = updatedFiles.sort((a, b) => {
            if (item.type === 'TV Show') {
+             // Sort by Season then Episode
              if (a.epSeason !== b.epSeason) return (a.epSeason || 0) - (b.epSeason || 0);
              if (a.epNumber !== b.epNumber) return (a.epNumber || 0) - (b.epNumber || 0);
            }
+           // Fallback: Sort by Owner
            return a.owner.localeCompare(b.owner);
         });
         setLoadedFiles(sorted);
@@ -132,7 +126,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
           <div className="space-y-4">
             {loadedFiles.map((file) => (
-              <div key={file.id} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors">
+              <div key={file.id || file.path} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors">
                 
                 {/* File Header Info */}
                 <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-start gap-4">
