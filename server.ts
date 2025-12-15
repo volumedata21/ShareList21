@@ -11,7 +11,6 @@ import { MediaFile, SyncPayload } from './types';
 const { verbose } = pkg; 
 const sqlite3 = verbose();
 
-// Helper to get __dirname in ES Modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -41,8 +40,6 @@ db.serialize(() => {
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
-// --- FIX IS HERE: Go up one level (../) to find the 'dist' folder ---
 app.use(express.static(path.join(__dirname, '../dist')));
 
 const requirePin = (req: Request, res: Response, next: NextFunction) => {
@@ -75,21 +72,31 @@ const wipeAndReplaceUser = (owner: string, files: MediaFile[]): Promise<void> =>
   });
 };
 
-// Routes
+// --- ROUTES ---
+
 app.get('/api/config', (req, res) => {
-  res.json({ users: ALLOWED_USERS, requiresPin: !!APP_PIN });
+  // Now includes hostUser so frontend knows who can scan
+  res.json({ 
+    users: ALLOWED_USERS, 
+    requiresPin: !!APP_PIN,
+    hostUser: HOST_USER
+  });
 });
 
 app.post('/api/scan', requirePin, async (req, res) => {
-  const { owner } = req.body;
+  // If no owner provided, default to HOST_USER
+  const owner = req.body.owner || HOST_USER;
+  
   if (owner !== HOST_USER) {
-    res.status(403).json({ error: 'Remote clients must use their own Docker Agent to scan.' });
+    res.status(403).json({ error: 'Only the Host User can trigger manual scans via the web UI.' });
     return;
   }
+
   try {
     if (!fs.existsSync(MEDIA_ROOT)) throw new Error(`Media folder ${MEDIA_ROOT} not found.`);
     const files = await processFiles(MEDIA_ROOT, owner);
     await wipeAndReplaceUser(owner, files);
+    
     console.log(`[Manual Scan] Updated ${files.length} files for ${owner}`);
     res.json({ success: true, count: files.length });
   } catch (e: any) {
@@ -125,7 +132,6 @@ app.get('/api/files', requirePin, (req, res) => {
   });
 });
 
-// --- FIX IS HERE ALSO: Go up one level for index.html ---
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist', 'index.html'));
 });

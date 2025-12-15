@@ -1,22 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { MediaItem, MediaFile, FilterType, AppConfig } from './types';
-import { fuzzyMatch, cleanName, getMediaType, getSeriesName } from './src/utils/mediaUtils';
+import { fuzzyMatch, cleanName, getMediaType, getSeriesName } from './utils/mediaUtils';
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
 
 const App: React.FC = () => {
-  // --- Auth & Config State ---
+  // --- Auth & Config ---
   const [configLoading, setConfigLoading] = useState(true);
   const [config, setConfig] = useState<AppConfig | null>(null);
   
-  // Auth State
   const [pinInput, setPinInput] = useState('');
   const [activePin, setActivePin] = useState(() => sessionStorage.getItem('pf_pin') || '');
   const [isLocked, setIsLocked] = useState(true);
   const [authError, setAuthError] = useState(false);
-  
-  // Persistence
-  const [currentUser, setCurrentUser] = useState<string>(() => localStorage.getItem('sl21_user') || '');
   
   // --- App Data ---
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -53,10 +49,6 @@ const App: React.FC = () => {
         setConfigLoading(false);
       });
   }, []);
-
-  useEffect(() => {
-    if (currentUser) localStorage.setItem('sl21_user', currentUser);
-  }, [currentUser]);
 
   // 2. Fetch/Unlock
   const refreshData = async (pinToUse: string) => {
@@ -115,10 +107,11 @@ const App: React.FC = () => {
 
   // --- SERVER SCAN LOGIC ---
   const handleScanLibrary = async () => {
-    if (!currentUser) return alert("Please select your username first.");
+    // We don't need a local user anymore. We use the Host User from config.
+    if (!config?.hostUser) return;
     
     setLoading(true);
-    setStatusMsg("Triggering server-side scan...");
+    setStatusMsg(`Scanning library for ${config.hostUser}...`);
 
     try {
       const res = await fetch('/api/scan', {
@@ -127,7 +120,7 @@ const App: React.FC = () => {
           'Content-Type': 'application/json',
           'x-app-pin': activePin 
         },
-        body: JSON.stringify({ owner: currentUser })
+        body: JSON.stringify({ owner: config.hostUser })
       });
 
       const result = await res.json();
@@ -198,21 +191,15 @@ const App: React.FC = () => {
         <header className="bg-gray-900 border-b border-gray-800 p-4">
           <div className="flex justify-between items-center mb-4">
             <h1 className="text-xl font-bold flex items-center gap-2"><span className="text-plex-orange">►</span> ShareList21</h1>
-            <div className="flex items-center gap-3">
-              <select value={currentUser} onChange={(e) => setCurrentUser(e.target.value)} className="bg-gray-800 text-sm border border-gray-700 text-white rounded px-3 py-1.5 focus:border-plex-orange outline-none">
-                <option value="">Select User...</option>
-                {config?.users.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-              <button onClick={handleLock} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded" title="Lock App">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
-              </button>
-            </div>
+            <button onClick={handleLock} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded" title="Lock App">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+            </button>
           </div>
           <div className="flex gap-2 mb-4">
             <input type="text" placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="flex-1 bg-gray-800 border border-gray-700 rounded px-4 py-2 text-white focus:border-plex-orange outline-none" />
             
-            {/* NEW SCAN LIBRARY BUTTON */}
-            {currentUser && (
+            {/* BUTTON ONLY SHOWS IF HOST USER IS CONFIGURED */}
+            {config?.hostUser && (
               <button 
                 onClick={handleScanLibrary}
                 disabled={loading}

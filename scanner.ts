@@ -2,27 +2,27 @@ import fs from 'fs/promises';
 import path from 'path';
 import { MediaFile } from './types';
 
-// Expanded Audio/Video Extensions
+// Valid Extensions
 const VALID_EXTS = new Set([
-  // Video
   '.mkv', '.mp4', '.avi', '.mov', '.wmv', '.iso', '.ts', '.m4v',
-  // Audio
   '.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.wma', '.alac', '.aiff', '.ape', '.opus'
 ]);
 
-// Ignored Folder Names (Normalized: lowercase, no spaces/hyphens)
-// REMOVED: 'other', 'scenes', 'shorts', 'trailers' (Too aggressive)
+// Aggressive Ignore List (Normalized: lowercase, no spaces/hyphens)
 const IGNORED_TERMS = new Set([
-  'extras', 
-  'specials', 
-  'season00', 
-  'season0', 
-  'sample', 
-  'samples',
-  'behindthescenes',
-  'deletedscenes',
-  'featurettes',
-  'interviews'
+  'extras', 'extra',
+  'specials', 'special',
+  'season00', 'season0',
+  'sample', 'samples',
+  'behindthescenes', 'bts',
+  'deletedscenes', 'deleted',
+  'featurettes', 'featurette',
+  'interviews', 'interview',
+  'scenes', 'scene',
+  'shorts', 'short',
+  'trailers', 'trailer',
+  'other', 'others',
+  'bonus', 'bonuses'
 ]);
 
 async function scanDirectory(dir: string): Promise<string[]> {
@@ -33,14 +33,15 @@ async function scanDirectory(dir: string): Promise<string[]> {
     for (const dirent of dirents) {
       const name = dirent.name;
       
-      // 1. HIDDEN FILE CHECK (._, .DS_Store, etc)
+      // 1. HIDDEN FILE/FOLDER CHECK (._, .DS_Store, etc)
       if (name.startsWith('.') || name.startsWith('_')) continue;
 
       const res = path.resolve(dir, name);
 
       if (dirent.isDirectory()) {
-        // 2. EXTRAS FOLDER CHECK
-        // Normalize: "Deleted Scenes" -> "deletedscenes"
+        // 2. AGGRESSIVE EXTRAS CHECK
+        // "Deleted Scenes" -> "deletedscenes"
+        // "Shorts" -> "shorts"
         const normalized = name.toLowerCase().replace(/[\s\-_]/g, '');
         
         if (IGNORED_TERMS.has(normalized)) continue;
@@ -50,7 +51,7 @@ async function scanDirectory(dir: string): Promise<string[]> {
         // 3. EXTENSION CHECK
         const ext = path.extname(res).toLowerCase();
         if (VALID_EXTS.has(ext)) {
-          // Skip small "sample" files (likely junk from downloads)
+          // Skip loose sample files
           if (name.toLowerCase().includes('sample') && (await fs.stat(res)).size < 50 * 1024 * 1024) {
              continue;
           }
@@ -77,7 +78,6 @@ export async function processFiles(mediaRoot: string, owner: string): Promise<Me
       const file: MediaFile = {
         rawFilename: path.basename(filePath),
         path: relativePath,
-        // Grab the first folder name as the "Library" (e.g., "Movies", "Music")
         library: relativePath.split(path.sep)[0] || 'Root',
         quality: path.basename(filePath).match(/4k|2160p|1080p|720p|sd/i)?.[0] || null,
         owner: owner,
