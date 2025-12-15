@@ -3,6 +3,7 @@ import { MediaItem, MediaFile, FilterType, AppConfig } from './types';
 import { fuzzyMatch, cleanName, getMediaType, getSeriesName } from './utils/mediaUtils';
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
+import SettingsModal from './components/SettingsModal'; // Assuming this exists or is part of standard imports
 
 const App: React.FC = () => {
   // --- Auth & Config ---
@@ -22,7 +23,41 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterType>('All');
 
-  // 1. Initial Load
+  // --- HISTORY & NAVIGATION HANDLERS ---
+  
+  // 1. Listen for Browser Back Button
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      // Whenever the user hits "Back", we close the modal
+      setSelectedItem(null);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // 2. Handle Item Selection (Push History)
+  const handleSelectMedia = (item: MediaItem) => {
+    // If we are already viewing an item (e.g. split screen), replace the history state
+    // so we don't build a huge stack of items to press "Back" through.
+    // If starting from list, push a new state.
+    if (selectedItem) {
+      window.history.replaceState({ itemId: item.id }, '', '');
+    } else {
+      window.history.pushState({ itemId: item.id }, '', '');
+    }
+    setSelectedItem(item);
+  };
+
+  // 3. Handle Manual Close (Pop History)
+  const handleCloseMedia = () => {
+    // Manually triggering "Back" removes the history state we pushed.
+    // This fires the 'popstate' event above, which sets selectedItem(null).
+    window.history.back();
+  };
+
+
+  // --- INITIAL LOAD & AUTH ---
   useEffect(() => {
     fetch('/api/config')
       .then(res => res.json())
@@ -234,12 +269,16 @@ const App: React.FC = () => {
         </header>
         {statusMsg && <div className="bg-blue-900/30 text-blue-200 text-xs p-2 text-center">{statusMsg}</div>}
         
-        {/* Pass filteredItems to MediaList */}
-        <MediaList items={filteredItems} onSelect={setSelectedItem} selectedId={selectedItem?.id} />
+        {/* Pass filteredItems to MediaList, use handleSelectMedia */}
+        <MediaList items={filteredItems} onSelect={handleSelectMedia} selectedId={selectedItem?.id} />
       </div>
 
       <div className={`fixed inset-0 z-30 md:static md:w-[450px] bg-gray-800 transition-transform duration-300 ${selectedItem ? 'translate-x-0' : 'translate-x-full md:translate-x-0 md:hidden'}`}>
-        {selectedItem ? <MediaDetail item={selectedItem} onClose={() => setSelectedItem(null)} /> : <div className="hidden md:flex items-center justify-center h-full text-gray-600">Select an item</div>}
+        {selectedItem ? (
+          <MediaDetail item={selectedItem} onClose={handleCloseMedia} />
+        ) : (
+          <div className="hidden md:flex items-center justify-center h-full text-gray-600">Select an item</div>
+        )}
       </div>
     </div>
   );
