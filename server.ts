@@ -19,7 +19,6 @@ const PORT = 80;
 
 const DB_PATH = '/data/sharelist.db';
 const APP_PIN = process.env.APP_PIN; 
-// NEW: The "Backstage" Key for automated clients
 const SYNC_SECRET = process.env.SYNC_SECRET;
 
 const ALLOWED_USERS = (process.env.APP_USERS || 'Guest').split(',');
@@ -33,12 +32,36 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   else console.log("Connected to SQLite database at", DB_PATH);
 });
 
+// --- NEW CLEANUP LOGIC ---
+const cleanupOrphanedUsers = () => {
+  if (ALLOWED_USERS.length === 0) return;
+
+  // Create placeholders for SQL (e.g., "?, ?, ?")
+  const placeholders = ALLOWED_USERS.map(() => '?').join(',');
+  
+  // Delete anyone NOT in the ALLOWED_USERS list
+  const query = `DELETE FROM media_files WHERE owner NOT IN (${placeholders})`;
+  
+  db.run(query, ALLOWED_USERS, function(err) {
+    if (err) {
+      console.error("[Cleanup] Failed to prune orphaned users:", err.message);
+    } else if (this.changes > 0) {
+      console.log(`[Cleanup] Removed ${this.changes} files belonging to removed users.`);
+      console.log(`[Cleanup] Valid Users are: ${ALLOWED_USERS.join(', ')}`);
+    }
+  });
+};
+// -------------------------
+
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS media_files (
     id TEXT PRIMARY KEY, owner TEXT, filename TEXT, path TEXT, 
     library TEXT, quality TEXT, size_bytes INTEGER, last_modified INTEGER
   )`);
   db.run("CREATE INDEX IF NOT EXISTS idx_owner ON media_files(owner)");
+  
+  // Run cleanup on startup
+  cleanupOrphanedUsers();
 });
 
 app.use(cors());
@@ -50,7 +73,6 @@ app.use(express.static(path.join(__dirname, '../dist')));
 interface LockoutState { attempts: number; lockoutUntil: number | null; }
 const ipLockouts = new Map<string, LockoutState>();
 
-// 1. PIN Check (For Humans / Web UI)
 const requirePin = (req: Request, res: Response, next: NextFunction) => {
   if (!APP_PIN) return next();
 
@@ -76,21 +98,15 @@ const requirePin = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 
-// 2. Secret Check (For Bots / Clients)
 const requireSecret = (req: Request, res: Response, next: NextFunction) => {
-  // If no secret is configured on server, block all syncs for security
   if (!SYNC_SECRET) {
     console.error("[Security] SYNC_SECRET not set on server. Rejecting /api/sync request.");
     res.status(500).json({ error: 'Server misconfiguration: No Sync Secret set.' });
     return;
   }
-
   const providedSecret = req.headers['x-sync-secret'];
-  
-  // Strict comparison
   if (String(providedSecret) !== String(SYNC_SECRET)) {
      console.warn(`[Security] Invalid Sync Secret attempt from ${req.ip}`);
-     // We return 401 but generic message so we don't leak that the endpoint exists
      res.status(401).json({ error: 'Unauthorized' }); 
      return;
   }
@@ -127,7 +143,6 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-// Manual Scan (Web UI) -> Requires PIN
 app.post('/api/scan', requirePin, async (req, res) => {
   const owner = req.body.owner || HOST_USER;
   if (owner !== HOST_USER) {
@@ -145,7 +160,6 @@ app.post('/api/scan', requirePin, async (req, res) => {
   }
 });
 
-// Sync (Client Script) -> Requires SYNC SECRET
 app.post('/api/sync', requireSecret, async (req, res) => {
   const { owner, files } = req.body as SyncPayload;
   if (!ALLOWED_USERS.includes(owner)) {
