@@ -45,7 +45,7 @@ const App: React.FC = () => {
         }
       })
       .catch(e => {
-        console.error(e);
+        console.error("Config Error:", e);
         setConfigLoading(false);
       });
   }, []);
@@ -63,8 +63,17 @@ const App: React.FC = () => {
         throw new Error("Invalid PIN");
       }
       if (!res.ok) throw new Error(`Server Error: ${res.status}`);
+      
       const files: MediaFile[] = await res.json();
-      setMediaItems(groupMediaFiles(files));
+      
+      // Safety: Ensure we actually got an array
+      if (Array.isArray(files)) {
+        setMediaItems(groupMediaFiles(files));
+      } else {
+        console.error("API did not return an array:", files);
+        setMediaItems([]);
+      }
+
       setActivePin(pinToUse);
       sessionStorage.setItem('pf_pin', pinToUse);
       setIsLocked(false);
@@ -86,28 +95,38 @@ const App: React.FC = () => {
 
   const groupMediaFiles = (files: MediaFile[]): MediaItem[] => {
     const map = new Map<string, MediaItem>();
+    
     files.forEach(file => {
-      let name = cleanName(file.rawFilename);
-      const type = getMediaType(file.path, file.rawFilename);
-      if (type === 'TV Show') {
-        const series = getSeriesName(file.rawFilename);
-        if (series) name = series;
-        else {
-          const parts = file.path.split('/');
-          const seasonIdx = parts.findIndex(p => p.toLowerCase().startsWith('season '));
-          if (seasonIdx > 0) name = parts[seasonIdx - 1];
+      try {
+        // Safety: handle missing filename
+        if (!file.rawFilename) return;
+
+        let name = cleanName(file.rawFilename);
+        const type = getMediaType(file.path, file.rawFilename);
+        
+        if (type === 'TV Show') {
+          const series = getSeriesName(file.rawFilename);
+          if (series) name = series;
+          else {
+            const parts = file.path.split('/');
+            const seasonIdx = parts.findIndex(p => p.toLowerCase().startsWith('season '));
+            if (seasonIdx > 0) name = parts[seasonIdx - 1];
+          }
         }
+        
+        const key = `${type}:${name.toLowerCase()}`;
+        if (!map.has(key)) map.set(key, { id: key, name: name || file.rawFilename, type, files: [] });
+        map.get(key)!.files.push(file);
+      } catch (err) {
+        console.warn("Skipping file due to grouping error:", file.rawFilename);
       }
-      const key = `${type}:${name.toLowerCase()}`;
-      if (!map.has(key)) map.set(key, { id: key, name: name || file.rawFilename, type, files: [] });
-      map.get(key)!.files.push(file);
     });
+
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   };
 
   // --- SERVER SCAN LOGIC ---
   const handleScanLibrary = async () => {
-    // We don't need a local user anymore. We use the Host User from config.
     if (!config?.hostUser) return;
     
     setLoading(true);
@@ -132,7 +151,6 @@ const App: React.FC = () => {
       setStatusMsg(`Scan Complete! Found ${result.count} files.`);
       setTimeout(() => setStatusMsg(null), 3000);
       
-      // Refresh list to show new files
       await refreshData(activePin);
 
     } catch (err: any) {
@@ -198,14 +216,13 @@ const App: React.FC = () => {
           <div className="flex gap-2 mb-4">
             <input type="text" placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="flex-1 bg-gray-800 border border-gray-700 rounded px-4 py-2 text-white focus:border-plex-orange outline-none" />
             
-            {/* BUTTON ONLY SHOWS IF HOST USER IS CONFIGURED */}
             {config?.hostUser && (
               <button 
                 onClick={handleScanLibrary}
                 disabled={loading}
                 className="bg-plex-orange hover:bg-yellow-600 text-black font-bold px-4 rounded disabled:opacity-50 whitespace-nowrap"
               >
-                {loading ? 'Scanning...' : 'Scan Library'}
+                {loading ? 'Scanning...' : 'Scan'}
               </button>
             )}
           </div>
@@ -216,6 +233,8 @@ const App: React.FC = () => {
           </div>
         </header>
         {statusMsg && <div className="bg-blue-900/30 text-blue-200 text-xs p-2 text-center">{statusMsg}</div>}
+        
+        {/* Pass filteredItems to MediaList */}
         <MediaList items={filteredItems} onSelect={setSelectedItem} selectedId={selectedItem?.id} />
       </div>
 

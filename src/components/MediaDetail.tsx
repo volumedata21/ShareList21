@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MediaItem, MediaFile } from '../types';
-// FIX: Changed '../src/utils/mediaUtils' to '../utils/mediaUtils'
+// FIX: Corrected import path
 import { formatBytes, parseEpisodeInfo, getEpisodeTitle } from '../utils/mediaUtils';
 
 interface MediaDetailProps {
@@ -13,7 +13,6 @@ interface ProcessedFile extends MediaFile {
   epNumber?: number;
   epFull?: string; // S01E01
   epTitle?: string;
-  // Added optional handle for types compatibility, though we aren't using browser handles anymore
   handle?: any; 
 }
 
@@ -22,47 +21,68 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
   // Load stats and parse episode info
   useEffect(() => {
+    // Safety Check: If item or files are missing, do not crash.
+    if (!item || !item.files) return;
+
     let mounted = true;
     
     const loadStats = async () => {
-      const updatedFiles = await Promise.all(item.files.map(async (file) => {
-        let size = file.sizeBytes;
-        let modified = file.lastModified;
+      try {
+        const updatedFiles = await Promise.all(item.files.map(async (file) => {
+          let size = file.sizeBytes;
+          let modified = file.lastModified;
 
-        // Parse Episode Info if TV Show
-        let epInfo = {};
-        if (item.type === 'TV Show') {
-          const info = parseEpisodeInfo(file.rawFilename);
-          if (info) {
-             epInfo = {
-               epSeason: info.season,
-               epNumber: info.episode,
-               epFull: info.full,
-               epTitle: getEpisodeTitle(file.rawFilename)
-             };
+          // Only try to load from handle if stats missing AND handle exists (Local Browser Mode)
+          if (size === undefined && file.handle) {
+            try {
+              const fileObj = await file.handle.getFile();
+              size = fileObj.size;
+              modified = fileObj.lastModified;
+            } catch (e) {
+              console.error("Error stats for", file.rawFilename);
+            }
           }
+
+          // Parse Episode Info if TV Show
+          let epInfo = {};
+          if (item.type === 'TV Show' && file.rawFilename) {
+            try {
+              const info = parseEpisodeInfo(file.rawFilename);
+              if (info) {
+                 epInfo = {
+                   epSeason: info.season,
+                   epNumber: info.episode,
+                   epFull: info.full,
+                   epTitle: getEpisodeTitle(file.rawFilename)
+                 };
+              }
+            } catch (err) {
+              // Ignore parsing errors for individual files
+            }
+          }
+
+          return {
+            ...file,
+            sizeBytes: size,
+            lastModified: modified,
+            ...epInfo
+          } as ProcessedFile;
+        }));
+
+        if (mounted) {
+          // Sort files
+          const sorted = updatedFiles.sort((a, b) => {
+             if (item.type === 'TV Show') {
+               if (a.epSeason !== b.epSeason) return (a.epSeason || 0) - (b.epSeason || 0);
+               if (a.epNumber !== b.epNumber) return (a.epNumber || 0) - (b.epNumber || 0);
+             }
+             // Safety: Handle undefined owners during sort
+             return (a.owner || '').localeCompare(b.owner || '');
+          });
+          setLoadedFiles(sorted);
         }
-
-        return {
-          ...file,
-          sizeBytes: size,
-          lastModified: modified,
-          ...epInfo
-        } as ProcessedFile;
-      }));
-
-      if (mounted) {
-        // Sort files
-        const sorted = updatedFiles.sort((a, b) => {
-           if (item.type === 'TV Show') {
-             // Sort by Season then Episode
-             if (a.epSeason !== b.epSeason) return (a.epSeason || 0) - (b.epSeason || 0);
-             if (a.epNumber !== b.epNumber) return (a.epNumber || 0) - (b.epNumber || 0);
-           }
-           // Fallback: Sort by Owner
-           return a.owner.localeCompare(b.owner);
-        });
-        setLoadedFiles(sorted);
+      } catch (e) {
+        console.error("Critical error loading file stats", e);
       }
     };
 
@@ -72,7 +92,10 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     return () => { mounted = false; };
   }, [item]);
 
-  const uniqueOwners = Array.from(new Set(item.files.map(f => f.owner))).sort();
+  // Safety Guard: Prevent rendering if item is null (Fixes Blank Page)
+  if (!item) return null;
+
+  const uniqueOwners = Array.from(new Set((item.files || []).map(f => f.owner))).sort();
 
   return (
     <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
@@ -85,7 +108,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
               {item.type}
             </span>
             <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs font-bold rounded">
-              {item.files.length} {item.files.length === 1 ? 'File' : 'Files'}
+              {item.files ? item.files.length : 0} {item.files?.length === 1 ? 'File' : 'Files'}
             </span>
           </div>
         </div>
@@ -109,9 +132,9 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
            </h3>
            <div className="flex flex-wrap gap-2">
              {uniqueOwners.map(owner => (
-               <div key={owner} className="flex items-center gap-2 bg-green-900/20 border border-green-500/50 rounded-full px-3 py-1 shadow-[0_0_10px_rgba(34,197,94,0.1)]">
+               <div key={owner || 'unknown'} className="flex items-center gap-2 bg-green-900/20 border border-green-500/50 rounded-full px-3 py-1 shadow-[0_0_10px_rgba(34,197,94,0.1)]">
                  <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.8)]"></div>
-                 <span className="text-sm font-bold text-green-100">{owner}</span>
+                 <span className="text-sm font-bold text-green-100">{owner || 'Unknown'}</span>
                </div>
              ))}
            </div>
@@ -125,8 +148,8 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
           </h3>
 
           <div className="space-y-4">
-            {loadedFiles.map((file) => (
-              <div key={file.id || file.path} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors">
+            {loadedFiles.map((file, idx) => (
+              <div key={file.id || idx} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors">
                 
                 {/* File Header Info */}
                 <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-start gap-4">
