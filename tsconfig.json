@@ -21,19 +21,15 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": [
-    "src/**/*.ts", 
-    "src/**/*.tsx", 
-    "*.ts", 
-    "*.tsx"
+    // ONLY include the frontend source code
+    "src"
   ],
   "exclude": [
     "node_modules", 
     "dist", 
     "dist-server",
-    
-    // CRITICAL: Tell Vite/Frontend to IGNORE backend files
-    "server.ts", 
-    "client.ts", 
+    "server.ts",
+    "client.ts",
     "scanner.ts"
   ]
 }
