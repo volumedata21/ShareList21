@@ -38,7 +38,6 @@ export const get4KFormat = (filename: string): boolean => {
   return lower.includes('4k') || lower.includes('2160p') || lower.includes('uhd');
 };
 
-// NEW: Helper to identify if a text string is just saying "4K"
 export const is4KQualityString = (quality: string | null): boolean => {
   if (!quality) return false;
   const lower = quality.toLowerCase();
@@ -47,10 +46,26 @@ export const is4KQualityString = (quality: string | null): boolean => {
 
 export const cleanName = (filename: string): string => {
   let name = filename;
+  let editionText = "";
 
+  // 1. Extract {edition-...} BEFORE cleaning
+  // Matches "{edition-Director's Cut}" and captures "Director's Cut"
+  const editionMatch = name.match(/\{edition-(.+?)\}/i);
+  if (editionMatch) {
+    editionText = editionMatch[1].trim(); 
+    // Remove the tag from the name so it doesn't get garbled by later regex
+    name = name.replace(editionMatch[0], ""); 
+  }
+
+  // 2. Remove Extension
   name = name.replace(/\.[^/.]+$/, "");
+
+  // 3. Replace dots/underscores with spaces
   name = name.replace(/[._]/g, " ");
 
+  // 4. Remove common release tags
+  // Note: We leave 'cut', 'extended' etc. in this list so normal filenames get cleaned,
+  // but since we extracted 'editionText' separately above, it remains safe.
   const tagsToRemove = [
     '4k', '2160p', '1080p', '720p', '480p', 'sd',
     'bluray', 'web-dl', 'webrip', 'dvdrip', 'hdr', 'dv',
@@ -63,11 +78,22 @@ export const cleanName = (filename: string): string => {
   name = name.replace(tagRegex, '');
   
   name = name.replace(/(\.sbs|\.hou)/gi, '');
+  
+  // Fix "Name (Year) - " Pattern
   name = name.replace(/(\(\d{4}\))\s*-\s*$/, '$1');
+  
+  // General Cleanup
   name = name.replace(/\s*-\s*$/, '');
   name = name.replace(/\s{2,}/g, ' ');
 
-  return name.trim();
+  name = name.trim();
+
+  // 5. Append Edition Text if it existed
+  if (editionText) {
+    name = `${name} - ${editionText}`;
+  }
+
+  return name;
 };
 
 export const fuzzyMatch = (text: string, query: string): boolean => {
