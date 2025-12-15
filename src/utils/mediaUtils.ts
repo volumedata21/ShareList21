@@ -11,18 +11,13 @@ export const getMediaType = (path: string, filename: string): 'Movie' | 'TV Show
   const lowerPath = path.toLowerCase();
   const lowerName = filename.toLowerCase();
   
-  // 1. Explicit Folder Check (Safest)
-  // If the file is in a folder named 'Music', 'Artist', etc.
   if (lowerPath.includes('/music/') || lowerPath.startsWith('music/')) return 'Music';
   if (lowerPath.includes('/tv/') || lowerPath.includes('/shows/') || lowerPath.startsWith('tv/')) return 'TV Show';
   if (lowerPath.includes('/movies/') || lowerPath.startsWith('movies/')) return 'Movie';
 
-  // 2. Extension Check
   if (/\.(mp3|flac|wav|m4a|aac|ogg|wma|alac|aiff|ape|opus)$/.test(lowerName)) return 'Music';
   
-  // 3. Video Disambiguation (TV vs Movie)
   if (/\.(mkv|mp4|avi|mov|wmv|m4v|ts|iso)$/.test(lowerName)) {
-     // S01E01 pattern or "Season" folder implies TV
      if (/s\d{2}e\d{2}/.test(lowerName) || lowerPath.includes('season')) return 'TV Show';
      return 'Movie';
   }
@@ -30,34 +25,47 @@ export const getMediaType = (path: string, filename: string): 'Movie' | 'TV Show
   return 'Unknown';
 };
 
+export const get3DFormat = (filename: string): string | null => {
+  const lower = filename.toLowerCase();
+  if (lower.includes('.sbs') || lower.includes('h-sbs')) return '3D SBS';
+  if (lower.includes('.hou') || lower.includes('h-ou')) return '3D OU';
+  if (lower.includes('.3d.') || lower.includes(' 3d ')) return '3D';
+  return null;
+};
+
+export const get4KFormat = (filename: string): boolean => {
+  const lower = filename.toLowerCase();
+  return lower.includes('4k') || lower.includes('2160p') || lower.includes('uhd');
+};
+
+// NEW: Helper to identify if a text string is just saying "4K"
+export const is4KQualityString = (quality: string | null): boolean => {
+  if (!quality) return false;
+  const lower = quality.toLowerCase();
+  return ['4k', '2160p', 'uhd', '4k uhd'].includes(lower);
+};
+
 export const cleanName = (filename: string): string => {
   let name = filename;
 
-  // 1. Remove Extension
   name = name.replace(/\.[^/.]+$/, "");
-
-  // 2. Replace dots/underscores with spaces
   name = name.replace(/[._]/g, " ");
 
-  // 3. Remove common release tags (case insensitive)
   const tagsToRemove = [
     '4k', '2160p', '1080p', '720p', '480p', 'sd',
     'bluray', 'web-dl', 'webrip', 'dvdrip', 'hdr', 'dv',
     'x264', 'x265', 'hevc', 'aac', 'ac3', 'dts', 'atmos',
-    'remastered', 'extended', 'cut'
+    'remastered', 'extended', 'cut', 'uhd',
+    '3d', 'sbs', 'h-sbs', 'hou', 'h-ou'
   ];
   
   const tagRegex = new RegExp(`\\b(${tagsToRemove.join('|')})\\b`, 'gi');
   name = name.replace(tagRegex, '');
-
-  // 4. Fix "Name (Year) - " Pattern (The one you asked for)
-  // "RoboCop (1987) - " -> "RoboCop (1987)"
-  // Matches Year followed by hyphen at the end of the string
-  name = name.replace(/(\(\d{4}\))\s*-\s*$/, '$1');
   
-  // 5. General Cleanup
-  name = name.replace(/\s*-\s*$/, ''); // Remove trailing " -"
-  name = name.replace(/\s{2,}/g, ' '); // Collapse double spaces
+  name = name.replace(/(\.sbs|\.hou)/gi, '');
+  name = name.replace(/(\(\d{4}\))\s*-\s*$/, '$1');
+  name = name.replace(/\s*-\s*$/, '');
+  name = name.replace(/\s{2,}/g, ' ');
 
   return name.trim();
 };
