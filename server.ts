@@ -42,15 +42,57 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, '../dist')));
 
+// --- RATE LIMITING LOGIC ---
+interface LockoutState {
+  attempts: number;
+  lockoutUntil: number | null;
+}
+
+// In-memory store for rate limiting by IP
+const ipLockouts = new Map<string, LockoutState>();
+
 const requirePin = (req: Request, res: Response, next: NextFunction) => {
   if (!APP_PIN) return next();
+
+  // Get Client IP (handle proxies if necessary, though simpler here)
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+  
+  const state = ipLockouts.get(ip) || { attempts: 0, lockoutUntil: null };
+
+  // 1. Check if currently locked out
+  if (state.lockoutUntil && Date.now() < state.lockoutUntil) {
+    const timeLeft = Math.ceil((state.lockoutUntil - Date.now()) / 1000);
+    console.warn(`[Security] Blocked request from locked IP: ${ip}`);
+    res.status(429).json({ error: `Too many attempts. Try again in ${timeLeft}s` });
+    return;
+  }
+
+  // 2. Validate PIN
   const provided = req.headers['x-app-pin'];
   if (String(provided) !== String(APP_PIN)) {
+     // Increment failure count
+     state.attempts += 1;
+     
+     if (state.attempts >= 5) {
+       // Lock for 30 seconds
+       state.lockoutUntil = Date.now() + (30 * 1000);
+       console.warn(`[Security] Locked out IP: ${ip} after 5 failed attempts`);
+     }
+     
+     ipLockouts.set(ip, state);
+
      res.status(401).json({ error: 'Invalid PIN' });
      return;
   }
+
+  // 3. Success - Reset failures for this IP
+  if (state.attempts > 0) {
+    ipLockouts.delete(ip);
+  }
+
   next();
 };
+// ---------------------------
 
 const wipeAndReplaceUser = (owner: string, files: MediaFile[]): Promise<void> => {
   return new Promise((resolve, reject) => {
