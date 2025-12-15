@@ -3,12 +3,14 @@ services:
     image: volumedata21/sharelist21:latest
     container_name: sharelist-client
     restart: unless-stopped
-    # No ports needed! It's just an outgoing script.
     volumes:
-      - /c/Users/Lamaar/Movies:/media  # Lamaar's local media
+      - /location/of/Lamar/Media:/media:ro
+#     - /location/of/Lamar/TV:/media/tv:ro
+#     - /location/of/Lamar/Movies:/media/movies:ro
+#     - /location/of/Lamar/Music:/media/music:ro
     environment:
       - ROLE=CLIENT
-      - CLIENT_USER=Lamaar
-      - SERVER_URL=https://sharelist.joe.com  # URL to Joe's Server
-      - APP_PIN=1234
-      - CRON_SCHEDULE=0 3 * * * # Run at 3am
+      - CLIENT_USER=Lamar
+      - SERVER_URL=https://server.url.com # SSL is required on host server
+      - SYNC_SECRET=a4f9d8c7e6b5a4... # run 'openssl rand -hex 32' for a secure secret
+      - CRON_SCHEDULE=0 3 * * * # runs sync every day at 3:00 AM
