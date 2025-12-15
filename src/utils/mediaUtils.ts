@@ -35,6 +35,15 @@ export const getMediaType = (path: string, filename: string): 'Movie' | 'TV Show
   return 'Unknown';
 };
 
+// NEW: Helper to extract audio format for badges
+export const getAudioFormat = (filename: string): string | null => {
+  const match = filename.match(/\.(mp3|flac|wav|m4a|aac|ogg|wma|alac|aiff|ape|opus)$/i);
+  if (match) {
+    return match[1].toUpperCase();
+  }
+  return null;
+};
+
 export const getMusicMetadata = (path: string) => {
   const normalizedPath = path.replace(/\\/g, '/');
   const parts = normalizedPath.split('/');
@@ -113,13 +122,9 @@ export const cleanName = (filename: string): string => {
   return name;
 };
 
-// UPDATED: Now supports multi-word "AND" matching
 export const fuzzyMatch = (text: string, query: string): boolean => {
   const lowerText = text.toLowerCase();
-  // Split by spaces, filter out empty strings
   const terms = query.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-  
-  // Return true only if EVERY term is present in the text
   return terms.every(term => lowerText.includes(term));
 };
 
