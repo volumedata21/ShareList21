@@ -1,6 +1,6 @@
 import React from 'react';
 import { MediaItem } from '../types';
-import { formatBytes } from '../utils/mediaUtils';
+import { get3DFormat, get4KFormat, is4KQualityString } from '../utils/mediaUtils';
 
 interface MediaListProps {
   items: MediaItem[];
@@ -8,93 +8,127 @@ interface MediaListProps {
   selectedId?: string;
 }
 
+const getIcon = (type: string) => {
+  switch (type) {
+    case 'Movie': return (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>
+    );
+    case 'TV Show': return (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+    );
+    case 'Music': return (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+    );
+    default: return (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+    );
+  }
+};
+
 const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) => {
-  
-  // Safety Guard: Handle empty or missing items
-  if (!items || items.length === 0) {
+  if (items.length === 0) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-gray-500">
-        <svg className="w-16 h-16 mb-4 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
-        </svg>
-        <p>No media found</p>
+      <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+        <p className="text-lg">No media found matching your filters.</p>
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-2 md:p-4 scrollbar-thin">
-      <div className="grid grid-cols-1 gap-2">
-        {items.map((item) => {
-          // Safety Checks
-          const files = item.files || [];
-          const totalSize = files.reduce((acc, f) => acc + (f.sizeBytes || 0), 0);
-          const isSelected = item.id === selectedId;
-          
-          // Badge Detection
-          const has4k = files.some(f => f.quality && (f.quality.includes('4k') || f.quality.includes('2160')));
-          const has3d = files.some(f => f.quality === '3D');
-          
-          return (
-            <div 
-              key={item.id}
-              onClick={() => onSelect(item)}
-              className={`
-                group p-3 md:p-4 rounded-lg cursor-pointer border transition-all duration-200
-                ${isSelected 
-                  ? 'bg-plex-orange/10 border-plex-orange shadow-[0_0_15px_rgba(229,160,13,0.1)]' 
-                  : 'bg-gray-800 border-gray-700 hover:bg-gray-750 hover:border-gray-600'
-                }
-              `}
-            >
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-3 overflow-hidden">
-                  {/* Type Icon */}
-                  <div className={`
-                    w-10 h-10 rounded-full flex items-center justify-center shrink-0 font-bold text-sm transition-colors
-                    ${isSelected ? 'bg-plex-orange text-black' : 'bg-gray-700 text-gray-400 group-hover:bg-gray-600 group-hover:text-white'}
-                  `}>
-                    {item.type === 'Movie' ? 'M' : item.type === 'TV Show' ? 'TV' : 'Au'}
-                  </div>
-                  
-                  <div className="min-w-0">
-                    <h3 className={`font-bold truncate ${isSelected ? 'text-plex-orange' : 'text-gray-200'}`}>
-                      {item.name}
-                    </h3>
-                    <div className="text-xs text-gray-500 flex gap-2 items-center">
-                      <span>{files.length} File{files.length !== 1 && 's'}</span>
-                      <span className="w-1 h-1 bg-gray-600 rounded-full"></span>
-                      <span>{item.type}</span>
-                    </div>
-                  </div>
-                </div>
+    <div className="flex-1 overflow-y-auto p-4 space-y-2 pb-24 lg:pb-4">
+      {items.map((item) => {
+        const versionCount = item.files.length;
+        
+        // Detect 4K via filename
+        const is4K = item.files.some(f => get4KFormat(f.rawFilename));
 
-                <div className="text-right shrink-0 flex flex-col items-end gap-1">
-                  <div className="font-mono text-sm text-gray-400 group-hover:text-gray-300">
-                    {formatBytes(totalSize)}
-                  </div>
-                  
-                  <div className="flex gap-1">
-                    {/* 3D Badge */}
-                    {has3d && (
-                      <span className="inline-block px-1.5 py-0.5 text-[10px] font-bold bg-blue-900/30 text-blue-400 rounded border border-blue-500/50">
-                        3D
-                      </span>
-                    )}
+        // Filter out "4K" from the quality strings if we are already showing the badge
+        const qualities = Array.from(new Set(
+          item.files
+            .map(f => f.quality)
+            .filter((q): q is string => Boolean(q) && !is4KQualityString(q))
+        )).slice(0, 3);
+        
+        const owners = Array.from(new Set(item.files.map(f => f.owner))).sort().join(', ');
+        const is3D = item.files.some(f => get3DFormat(f.rawFilename));
 
-                    {/* 4K Badge */}
-                    {has4k && (
-                      <span className="inline-block px-1.5 py-0.5 text-[10px] font-bold bg-gray-700 text-plex-orange rounded border border-gray-600">
-                        4K
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
+        return (
+          <button
+            key={item.id}
+            onClick={() => onSelect(item)}
+            className={`w-full flex items-center p-3 rounded-lg text-left transition-colors duration-200 group
+              ${selectedId === item.id 
+                ? 'bg-plex-orange text-white shadow-lg' 
+                : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+              }`}
+          >
+            <div className={`p-2 rounded-full mr-4 ${selectedId === item.id ? 'bg-white/20' : 'bg-gray-700 group-hover:bg-gray-600'}`}>
+              {getIcon(item.type)}
             </div>
-          );
-        })}
-      </div>
+            
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold truncate flex items-center gap-2">
+                {item.name}
+              </h3>
+              
+              <div className="flex items-center gap-1 mt-0.5">
+                 <svg className={`w-3 h-3 ${selectedId === item.id ? 'text-green-300' : 'text-green-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                 </svg>
+                 <p className={`text-xs truncate font-bold ${selectedId === item.id ? 'text-green-100' : 'text-green-400'}`}>
+                   {owners}
+                 </p>
+              </div>
+
+              <p className={`text-[10px] truncate flex gap-2 mt-0.5 ${selectedId === item.id ? 'text-white/60' : 'text-gray-500'}`}>
+                <span>{item.type}</span>
+                {item.type === 'TV Show' && (
+                   <span>• {versionCount} Ep/Files</span>
+                )}
+                {item.type !== 'TV Show' && versionCount > 1 && (
+                  <span className="font-bold">• {versionCount} Versions</span>
+                )}
+              </p>
+            </div>
+
+            <div className="flex flex-row items-center ml-2 gap-1">
+              {/* GOLD 4K BADGE */}
+              {is4K && (
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap
+                  ${selectedId === item.id 
+                    ? 'border-black/20 bg-black/20 text-white' 
+                    : 'border-plex-orange bg-plex-orange text-black'
+                  }`}>
+                  4K UHD
+                </span>
+              )}
+
+              {/* 3D BADGE */}
+              {is3D && (
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap
+                  ${selectedId === item.id ? 'border-blue-300 bg-blue-500/50 text-white' : 'border-blue-500 text-blue-400 bg-blue-900/30'}`}>
+                  3D
+                </span>
+              )}
+
+              {/* Other Qualities (excluding 4K strings) */}
+              {qualities.map((q, i) => (
+                <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap
+                  ${selectedId === item.id ? 'border-white/40 bg-white/10' : 'border-gray-600 bg-gray-700 text-gray-400'}`}>
+                  {q}
+                </span>
+              ))}
+              
+              {qualities.length === 0 && !is3D && !is4K && (
+                 <span className={`text-[9px] px-1.5 py-0.5 rounded border 
+                 ${selectedId === item.id ? 'border-white/20' : 'border-gray-700 text-gray-600'}`}>
+                   STD
+                 </span>
+              )}
+            </div>
+          </button>
+        );
+      })}
     </div>
   );
 };
