@@ -21,7 +21,7 @@ services:
       - ROLE=SERVER
       - APP_USERS=Joe,Lamar,Josh # Add/remove users here
       - APP_PIN=1234
-      - SYNC_SECRET=a4f9d8c7e6b5a4...
+      - SYNC_SECRET=a4f9d8c7e6b5a4... # run 'openssl rand -hex 32' for a secure secret
       - HOST_USER=Joe  # Enables the server to self-scan /media
       - MEDIA_ROOT=/media
 ```
@@ -48,6 +48,6 @@ services:
       - ROLE=CLIENT
       - CLIENT_USER=Lamar
       - SERVER_URL=https://server.url.com # SSL is required on host server
-      - SYNC_SECRET=a4f9d8c7e6b5a4... # run 'openssl rand -hex 32' for a secure secret
+      - SYNC_SECRET=a4f9d8c7e6b5a4...
       - CRON_SCHEDULE=0 3 * * * # runs sync every day at 3:00 AM
 ```
