@@ -35,7 +35,6 @@ export const getMediaType = (path: string, filename: string): 'Movie' | 'TV Show
   return 'Unknown';
 };
 
-// NEW: Helper to extract audio format for badges
 export const getAudioFormat = (filename: string): string | null => {
   const match = filename.match(/\.(mp3|flac|wav|m4a|aac|ogg|wma|alac|aiff|ape|opus)$/i);
   if (match) {
@@ -112,6 +111,10 @@ export const cleanName = (filename: string): string => {
   name = name.replace(/(\(\d{4}\))\s*-\s*$/, '$1');
   name = name.replace(/\s*-\s*$/, '');
   name = name.replace(/\s{2,}/g, ' ');
+  
+  // NEW: Remove empty brackets that might be left over (e.g., "Movie []")
+  name = name.replace(/\[\s*\]/g, "");
+  name = name.replace(/\(\s*\)/g, "");
 
   name = name.trim();
 
