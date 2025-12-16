@@ -32,20 +32,15 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   else console.log("Connected to SQLite database at", DB_PATH);
 });
 
-// --- NEW CLEANUP LOGIC ---
+// --- STATE MANAGEMENT ---
+const pendingScans: Record<string, boolean> = {};
+
 const cleanupOrphanedUsers = () => {
   if (ALLOWED_USERS.length === 0) return;
-
   const placeholders = ALLOWED_USERS.map(() => '?').join(',');
   const query = `DELETE FROM media_files WHERE owner NOT IN (${placeholders})`;
-  
-  db.run(query, ALLOWED_USERS, function(err) {
-    if (err) {
-      console.error("[Cleanup] Failed to prune orphaned users:", err.message);
-    } else if (this.changes > 0) {
-      console.log(`[Cleanup] Removed ${this.changes} files belonging to removed users.`);
-      console.log(`[Cleanup] Valid Users are: ${ALLOWED_USERS.join(', ')}`);
-    }
+  db.run(query, ALLOWED_USERS, (err) => {
+    if (err) console.error("[Cleanup Error]", err.message);
   });
 };
 
@@ -55,7 +50,6 @@ db.serialize(() => {
     library TEXT, quality TEXT, size_bytes INTEGER, last_modified INTEGER
   )`);
   db.run("CREATE INDEX IF NOT EXISTS idx_owner ON media_files(owner)");
-  
   cleanupOrphanedUsers();
 });
 
@@ -63,14 +57,12 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, '../dist')));
 
-// --- RATE LIMITING & AUTH MIDDLEWARE ---
-
+// --- MIDDLEWARE ---
 interface LockoutState { attempts: number; lockoutUntil: number | null; }
 const ipLockouts = new Map<string, LockoutState>();
 
 const requirePin = (req: Request, res: Response, next: NextFunction) => {
   if (!APP_PIN) return next();
-
   const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
   const state = ipLockouts.get(ip) || { attempts: 0, lockoutUntil: null };
 
@@ -88,20 +80,17 @@ const requirePin = (req: Request, res: Response, next: NextFunction) => {
      res.status(401).json({ error: 'Invalid PIN' });
      return;
   }
-
   if (state.attempts > 0) ipLockouts.delete(ip);
   next();
 };
 
 const requireSecret = (req: Request, res: Response, next: NextFunction) => {
   if (!SYNC_SECRET) {
-    console.error("[Security] SYNC_SECRET not set on server. Rejecting /api/sync request.");
     res.status(500).json({ error: 'Server misconfiguration: No Sync Secret set.' });
     return;
   }
   const providedSecret = req.headers['x-sync-secret'];
   if (String(providedSecret) !== String(SYNC_SECRET)) {
-     console.warn(`[Security] Invalid Sync Secret attempt from ${req.ip}`);
      res.status(401).json({ error: 'Unauthorized' }); 
      return;
   }
@@ -138,23 +127,70 @@ app.get('/api/config', (req, res) => {
   });
 });
 
+// TRIGGER SCAN (Web UI)
 app.post('/api/scan', requirePin, async (req, res) => {
-  const owner = req.body.owner || HOST_USER;
-  if (owner !== HOST_USER) {
-    res.status(403).json({ error: 'Only the Host User can trigger manual scans via the web UI.' });
-    return;
-  }
+  const owner = req.body.owner || 'ALL'; // Default to ALL if unspecified
+  
   try {
-    if (!fs.existsSync(MEDIA_ROOT)) throw new Error(`Media folder ${MEDIA_ROOT} not found.`);
-    const files = await processFiles(MEDIA_ROOT, owner);
-    await wipeAndReplaceUser(owner, files);
-    res.json({ success: true, count: files.length });
+    let hostScanned = false;
+    let remoteQueued = 0;
+
+    // 1. Logic for "ALL"
+    if (owner === 'ALL') {
+      // Scan Host (Local)
+      if (HOST_USER && fs.existsSync(MEDIA_ROOT)) {
+        const files = await processFiles(MEDIA_ROOT, HOST_USER);
+        await wipeAndReplaceUser(HOST_USER, files);
+        hostScanned = true;
+      }
+
+      // Queue Everyone Else (Remote)
+      ALLOWED_USERS.forEach(u => {
+        if (u !== HOST_USER) {
+          pendingScans[u] = true;
+          remoteQueued++;
+        }
+      });
+
+      res.json({ 
+        success: true, 
+        message: `Host scanned. Queued updates for ${remoteQueued} clients.`,
+        type: 'ALL'
+      });
+      return;
+    }
+
+    // 2. Logic for Specific User (Legacy support)
+    if (owner === HOST_USER) {
+      if (!fs.existsSync(MEDIA_ROOT)) throw new Error(`Media folder not found.`);
+      const files = await processFiles(MEDIA_ROOT, owner);
+      await wipeAndReplaceUser(owner, files);
+      res.json({ success: true, count: files.length, type: 'LOCAL' });
+    } else if (ALLOWED_USERS.includes(owner)) {
+      pendingScans[owner] = true;
+      res.json({ success: true, message: 'Scan queued.', type: 'REMOTE' });
+    } else {
+      res.status(400).json({ error: 'User not known.' });
+    }
+
   } catch (e: any) {
     console.error(e);
     res.status(500).json({ error: e.message });
   }
 });
 
+// HEARTBEAT
+app.get('/api/work', requireSecret, (req, res) => {
+  const user = req.query.user as string;
+  if (!user || !ALLOWED_USERS.includes(user)) {
+    res.status(400).json({ error: 'Invalid user' });
+    return;
+  }
+  const needsScan = pendingScans[user] === true;
+  res.json({ scan: needsScan });
+});
+
+// SYNC
 app.post('/api/sync', requireSecret, async (req, res) => {
   const { owner, files } = req.body as SyncPayload;
   if (!ALLOWED_USERS.includes(owner)) {
@@ -163,6 +199,10 @@ app.post('/api/sync', requireSecret, async (req, res) => {
   }
   try {
     await wipeAndReplaceUser(owner, files);
+    if (pendingScans[owner]) {
+      console.log(`[Job Complete] Cleared pending scan for ${owner}`);
+      delete pendingScans[owner];
+    }
     console.log(`[API] Synced ${files.length} files for ${owner}`);
     res.json({ success: true, count: files.length });
   } catch (err: any) { 
@@ -174,15 +214,12 @@ app.post('/api/sync', requireSecret, async (req, res) => {
 app.get('/api/files', requirePin, (req, res) => {
   db.all('SELECT * FROM media_files ORDER BY filename ASC', (err, rows: any[]) => {
     if (err) { res.status(500).json({ error: err.message }); return; }
-    
-    // UPDATED: Map DB columns (snake_case) to Frontend properties (camelCase)
     const files = rows.map(r => ({ 
       ...r, 
       rawFilename: r.filename,
       sizeBytes: r.size_bytes, 
       lastModified: r.last_modified
     }));
-    
     res.json(files);
   });
 });
@@ -195,7 +232,6 @@ if (HOST_USER) {
   const runHostScan = async () => {
     try {
       if (fs.existsSync(MEDIA_ROOT)) {
-         console.log("[Auto Scan] Scanning host library...");
          const files = await processFiles(MEDIA_ROOT, HOST_USER);
          await wipeAndReplaceUser(HOST_USER, files);
          console.log(`[Auto Scan] Complete. ${files.length} files.`);
