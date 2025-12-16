@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, MediaFile, FilterType, AppConfig } from './types';
-import { fuzzyMatch, cleanName, getMediaType, getSeriesName, getMusicMetadata } from './utils/mediaUtils';
+import { fuzzyMatch, cleanName, getMediaType, getSeriesName, getMusicMetadata, getAudioFormat } from './utils/mediaUtils';
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
 
@@ -28,12 +28,10 @@ const App: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<FilterType>('All');
 
   // --- HISTORY & NAVIGATION HANDLERS ---
-  
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
       setSelectedItem(null);
     };
-
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
@@ -50,7 +48,6 @@ const App: React.FC = () => {
   const handleCloseMedia = () => {
     window.history.back();
   };
-
 
   // --- LOCKOUT TIMER ---
   useEffect(() => {
@@ -69,7 +66,6 @@ const App: React.FC = () => {
     }
     return () => clearInterval(timer);
   }, [lockoutEnds]);
-
 
   // --- INITIAL LOAD & AUTH ---
   useEffect(() => {
@@ -99,7 +95,6 @@ const App: React.FC = () => {
       });
   }, []);
 
-  // 2. Fetch/Unlock
   const refreshData = async (pinToUse: string) => {
     if (lockoutEnds && Date.now() < lockoutEnds) return;
 
@@ -123,7 +118,6 @@ const App: React.FC = () => {
           setTimeLeft(30);
           setPinInput('');
         }
-
         throw new Error("Invalid PIN");
       }
       if (!res.ok) throw new Error(`Server Error: ${res.status}`);
@@ -136,7 +130,6 @@ const App: React.FC = () => {
       if (Array.isArray(files)) {
         setMediaItems(groupMediaFiles(files));
       } else {
-        console.error("API did not return an array:", files);
         setMediaItems([]);
       }
 
@@ -172,14 +165,8 @@ const App: React.FC = () => {
         if (type === 'Music') {
           const { artist } = getMusicMetadata(file.path);
           const key = `Music:${artist.toLowerCase()}`;
-          
           if (!map.has(key)) {
-            map.set(key, { 
-              id: key, 
-              name: artist, 
-              type: 'Music', 
-              files: [] 
-            });
+            map.set(key, { id: key, name: artist, type: 'Music', files: [] });
           }
           map.get(key)!.files.push(file);
           return;
@@ -220,11 +207,10 @@ const App: React.FC = () => {
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   };
 
-  const handleScanLibrary = async () => {
-    if (!config?.hostUser) return;
-    
+  // --- SCAN ALL LOGIC ---
+  const handleScanAll = async () => {
     setLoading(true);
-    setStatusMsg(`Scanning library for ${config.hostUser}...`);
+    setStatusMsg(`Scanning host and notifying all clients...`);
 
     try {
       const res = await fetch('/api/scan', {
@@ -233,19 +219,18 @@ const App: React.FC = () => {
           'Content-Type': 'application/json',
           'x-app-pin': activePin 
         },
-        body: JSON.stringify({ owner: config.hostUser })
+        body: JSON.stringify({ owner: 'ALL' })
       });
 
       const result = await res.json();
 
-      if (!res.ok) {
-        throw new Error(result.error || "Scan failed");
-      }
+      if (!res.ok) throw new Error(result.error || "Scan failed");
 
-      setStatusMsg(`Scan Complete! Found ${result.count} files.`);
-      setTimeout(() => setStatusMsg(null), 3000);
-      
+      // Scan was successful. If Local files changed, refresh UI immediately.
+      setStatusMsg(result.message);
       await refreshData(activePin);
+      
+      setTimeout(() => setStatusMsg(null), 4000);
 
     } catch (err: any) {
       console.error(err);
@@ -258,28 +243,19 @@ const App: React.FC = () => {
 
   // --- FILTER & RANKING LOGIC ---
   const filteredItems = useMemo(() => {
-    // Helper to score items
     const calculateScore = (text: string, query: string, isPrimary: boolean, type: string) => {
       let score = 0;
       const lowerText = text.toLowerCase();
       const lowerQuery = query.toLowerCase();
 
-      // 1. Exact Match (Highest Priority)
       if (lowerText === lowerQuery) score += 100;
-      
-      // 2. Starts With (High Priority)
       else if (lowerText.startsWith(lowerQuery)) score += 50;
-      
-      // 3. Contains (Standard Match)
       else if (fuzzyMatch(text, query)) score += isPrimary ? 10 : 1;
-      else return 0; // No match
+      else return 0;
 
-      // 4. Type Preference Bonus
-      // Movies, Shows, Artists > Albums > Episodes/Files
       if (['Movie', 'TV Show', 'Music'].includes(type) && isPrimary) {
         score += 5; 
       }
-
       return score;
     };
 
@@ -289,21 +265,14 @@ const App: React.FC = () => {
       if (activeFilter !== 'All' && item.type !== activeFilter) return;
 
       if (!searchQuery) {
-        scoredResults.push({ item, score: 0 }); // Preserve original sort if no search
+        scoredResults.push({ item, score: 0 });
         return;
       }
 
-      // --- SCORING LOGIC ---
-      
-      // Special Handling for Music (Albums)
       if (item.type === 'Music') {
-        // 1. Check Artist Name (Primary)
         const artistScore = calculateScore(item.name, searchQuery, true, 'Music');
-        if (artistScore > 0) {
-          scoredResults.push({ item, score: artistScore });
-        }
+        if (artistScore > 0) scoredResults.push({ item, score: artistScore });
 
-        // 2. Check Albums (Secondary Item Generation)
         const albumMap = new Map<string, MediaFile[]>();
         item.files.forEach(f => {
           const { album } = getMusicMetadata(f.path);
@@ -312,18 +281,13 @@ const App: React.FC = () => {
         });
 
         albumMap.forEach((files, albumName) => {
-          // Score the Album Name
           const albumScore = calculateScore(albumName, searchQuery, true, 'Album');
-          
-          // Check Tracks if Album didn't match strongly
           let trackScore = 0;
-          if (albumScore < 10) { // Only check tracks if album wasn't a direct hit
+          if (albumScore < 10) {
              const hasTrackMatch = files.some(f => fuzzyMatch(f.rawFilename, searchQuery));
              if (hasTrackMatch) trackScore = 1; 
           }
-
           const finalScore = Math.max(albumScore, trackScore);
-
           if (finalScore > 0) {
             scoredResults.push({
               item: {
@@ -339,15 +303,12 @@ const App: React.FC = () => {
         return;
       }
 
-      // Standard Handling (Movies / TV)
       const nameScore = calculateScore(item.name, searchQuery, true, item.type);
-      
       let fileScore = 0;
-      if (nameScore < 10) { // Optimization: Don't scan files if name already matched well
+      if (nameScore < 10) {
         const hasFileMatch = item.files.some(f => fuzzyMatch(f.rawFilename, searchQuery));
         if (hasFileMatch) fileScore = 1;
       }
-
       const totalScore = Math.max(nameScore, fileScore);
       
       if (totalScore > 0) {
@@ -355,7 +316,6 @@ const App: React.FC = () => {
       }
     });
 
-    // Sort by Score Descending
     return scoredResults
       .sort((a, b) => b.score - a.score)
       .map(r => r.item);
@@ -378,7 +338,6 @@ const App: React.FC = () => {
 
   if (isLocked) {
     const isLockedOut = !!lockoutEnds;
-
     return (
       <div className="h-screen bg-gray-900 flex items-center justify-center text-white p-4">
         <div className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
@@ -389,7 +348,6 @@ const App: React.FC = () => {
           <div className="p-6 space-y-4">
              <div className="space-y-1">
                <label className="text-xs font-bold uppercase text-gray-400 tracking-wider ml-1">Application PIN</label>
-               
                <input 
                  type="password" 
                  value={pinInput} 
@@ -402,25 +360,13 @@ const App: React.FC = () => {
                    ${isLockedOut ? 'border-red-900 bg-red-900/10 text-red-400 cursor-not-allowed placeholder:text-red-500/50' : 
                      authError ? 'border-red-500 text-red-200' : 'border-gray-600 focus:border-plex-orange'}`} 
                />
-               
                {isLockedOut ? (
-                 <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">
-                   Too many attempts. Wait {timeLeft}s.
-                 </p>
+                 <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">Too many attempts. Wait {timeLeft}s.</p>
                ) : authError && (
-                 <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">
-                   Access Denied {failedAttempts > 0 && `(${failedAttempts}/5)`}
-                 </p>
+                 <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">Access Denied {failedAttempts > 0 && `(${failedAttempts}/5)`}</p>
                )}
              </div>
-             <button 
-               onClick={handleUnlock} 
-               disabled={loading || !pinInput || isLockedOut} 
-               className={`w-full font-bold py-3 rounded shadow-lg transition-colors
-                 ${isLockedOut || !pinInput ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-plex-orange hover:bg-yellow-600 text-black'}`}
-             >
-               {isLockedOut ? 'Locked' : 'Unlock'}
-             </button>
+             <button onClick={handleUnlock} disabled={loading || !pinInput || isLockedOut} className={`w-full font-bold py-3 rounded shadow-lg transition-colors ${isLockedOut || !pinInput ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-plex-orange hover:bg-yellow-600 text-black'}`}>{isLockedOut ? 'Locked' : 'Unlock'}</button>
           </div>
         </div>
       </div>
@@ -429,44 +375,37 @@ const App: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col md:flex-row bg-gray-900 text-gray-100 overflow-hidden relative">
-      
       <div className={`flex-1 flex flex-col h-full relative ${selectedItem ? 'hidden md:flex' : 'flex'}`}>
         <header className="bg-gray-900 border-b border-gray-800 p-4">
           <div className="flex justify-between items-center mb-4">
             <h1 className="text-xl font-bold flex items-center gap-2"><span className="text-plex-orange">►</span> ShareList21</h1>
             
             <div className="flex items-center gap-3">
-              <a 
-                href="https://github.com/volumedata21/ShareList21" 
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-gray-500 hover:text-white transition-colors"
-                title="View on GitHub"
-              >
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                  <path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" />
-                </svg>
+              <a href="https://github.com/volumedata21/ShareList21" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-white transition-colors" title="View on GitHub">
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" /></svg>
               </a>
-
               <button onClick={handleLock} className="p-1.5 text-gray-500 hover:text-white hover:bg-gray-800 rounded" title="Lock App">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
               </button>
             </div>
-
           </div>
+
           <div className="flex gap-2 mb-4">
             <input type="text" placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="flex-1 bg-gray-800 border border-gray-700 rounded px-4 py-2 text-white focus:border-plex-orange outline-none" />
             
-            {config?.hostUser && (
-              <button 
-                onClick={handleScanLibrary}
-                disabled={loading}
-                className="bg-plex-orange hover:bg-yellow-600 text-black font-bold px-4 rounded disabled:opacity-50 whitespace-nowrap"
-              >
-                {loading ? 'Scanning...' : 'Scan'}
-              </button>
-            )}
+            {/* NEW: Scan All Button (No Dropdown) */}
+            <button 
+              onClick={handleScanAll}
+              disabled={loading}
+              className="bg-plex-orange hover:bg-yellow-600 text-black font-bold px-4 py-2 rounded shadow-lg transition-transform transform active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:scale-100 disabled:cursor-not-allowed"
+            >
+              <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              {loading ? 'Scanning...' : 'Scan All'}
+            </button>
           </div>
+
           <div className="flex gap-2 overflow-x-auto pb-1">
             {['All', 'Movie', 'TV Show', 'Music'].map(f => (
               <button key={f} onClick={() => setActiveFilter(f as FilterType)} className={`px-3 py-1 text-xs font-bold rounded-full border ${activeFilter === f ? 'bg-white text-black' : 'border-gray-700 text-gray-500'}`}>{f}</button>
