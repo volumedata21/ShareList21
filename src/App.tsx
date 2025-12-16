@@ -190,24 +190,18 @@ const App: React.FC = () => {
           if (series) {
             name = series;
           } else {
-            // Logic updated to handle shows without Season folders
             const parts = file.path.replace(/\\/g, '/').split('/');
-            
-            // 1. Try to find "Season XX" folder
             const seasonIdx = parts.findIndex(p => p.toLowerCase().startsWith('season '));
             if (seasonIdx > 0) {
               name = parts[seasonIdx - 1];
             } else {
-              // 2. Fallback: Find "TV Shows" root and take the next folder as Series Name
               const lowerParts = parts.map(p => p.toLowerCase());
               const roots = ['tv shows', 'tv', 'shows'];
               let rootIdx = -1;
-              
               for (const r of roots) {
                 const idx = lowerParts.lastIndexOf(r);
                 if (idx > rootIdx) rootIdx = idx;
               }
-
               if (rootIdx !== -1 && rootIdx + 1 < parts.length) {
                 name = parts[rootIdx + 1];
               }
@@ -226,7 +220,6 @@ const App: React.FC = () => {
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   };
 
-  // --- SERVER SCAN LOGIC ---
   const handleScanLibrary = async () => {
     if (!config?.hostUser) return;
     
@@ -263,29 +256,54 @@ const App: React.FC = () => {
     }
   };
 
-  // --- FILTER & SEARCH LOGIC ---
+  // --- FILTER & RANKING LOGIC ---
   const filteredItems = useMemo(() => {
-    const results: MediaItem[] = [];
+    // Helper to score items
+    const calculateScore = (text: string, query: string, isPrimary: boolean, type: string) => {
+      let score = 0;
+      const lowerText = text.toLowerCase();
+      const lowerQuery = query.toLowerCase();
+
+      // 1. Exact Match (Highest Priority)
+      if (lowerText === lowerQuery) score += 100;
+      
+      // 2. Starts With (High Priority)
+      else if (lowerText.startsWith(lowerQuery)) score += 50;
+      
+      // 3. Contains (Standard Match)
+      else if (fuzzyMatch(text, query)) score += isPrimary ? 10 : 1;
+      else return 0; // No match
+
+      // 4. Type Preference Bonus
+      // Movies, Shows, Artists > Albums > Episodes/Files
+      if (['Movie', 'TV Show', 'Music'].includes(type) && isPrimary) {
+        score += 5; 
+      }
+
+      return score;
+    };
+
+    const scoredResults: { item: MediaItem, score: number }[] = [];
 
     mediaItems.forEach(item => {
-      // 1. Filter by Tab
       if (activeFilter !== 'All' && item.type !== activeFilter) return;
 
-      // 2. If no search, just pass item through
       if (!searchQuery) {
-        results.push(item);
+        scoredResults.push({ item, score: 0 }); // Preserve original sort if no search
         return;
       }
 
-      // 3. Search Logic
-      // Special handling for Music to show Albums
+      // --- SCORING LOGIC ---
+      
+      // Special Handling for Music (Albums)
       if (item.type === 'Music') {
-        // A. Match Artist Name
-        if (fuzzyMatch(item.name, searchQuery)) {
-          results.push(item);
+        // 1. Check Artist Name (Primary)
+        const artistScore = calculateScore(item.name, searchQuery, true, 'Music');
+        if (artistScore > 0) {
+          scoredResults.push({ item, score: artistScore });
         }
 
-        // B. Group by Album & Check for Matches (Album Name OR Track Name)
+        // 2. Check Albums (Secondary Item Generation)
         const albumMap = new Map<string, MediaFile[]>();
         item.files.forEach(f => {
           const { album } = getMusicMetadata(f.path);
@@ -294,35 +312,54 @@ const App: React.FC = () => {
         });
 
         albumMap.forEach((files, albumName) => {
-          // Check 1: Does Album Name match?
-          const matchAlbum = fuzzyMatch(albumName, searchQuery);
-          // Check 2: Do any Tracks inside match?
-          const matchTrack = files.some(f => fuzzyMatch(f.rawFilename, searchQuery));
+          // Score the Album Name
+          const albumScore = calculateScore(albumName, searchQuery, true, 'Album');
+          
+          // Check Tracks if Album didn't match strongly
+          let trackScore = 0;
+          if (albumScore < 10) { // Only check tracks if album wasn't a direct hit
+             const hasTrackMatch = files.some(f => fuzzyMatch(f.rawFilename, searchQuery));
+             if (hasTrackMatch) trackScore = 1; 
+          }
 
-          if (matchAlbum || matchTrack) {
-            // Create a specific item for this album
-            results.push({
-              id: `${item.id}:album:${albumName}`,
-              name: albumName,
-              type: 'Music',
-              files: files
+          const finalScore = Math.max(albumScore, trackScore);
+
+          if (finalScore > 0) {
+            scoredResults.push({
+              item: {
+                id: `${item.id}:album:${albumName}`,
+                name: albumName,
+                type: 'Music',
+                files: files
+              },
+              score: finalScore
             });
           }
         });
         return;
       }
 
-      // Standard Logic (Movies/TV)
-      if (fuzzyMatch(item.name, searchQuery)) {
-        results.push(item);
-        return;
+      // Standard Handling (Movies / TV)
+      const nameScore = calculateScore(item.name, searchQuery, true, item.type);
+      
+      let fileScore = 0;
+      if (nameScore < 10) { // Optimization: Don't scan files if name already matched well
+        const hasFileMatch = item.files.some(f => fuzzyMatch(f.rawFilename, searchQuery));
+        if (hasFileMatch) fileScore = 1;
       }
-      if (item.files.some(f => fuzzyMatch(f.path, searchQuery))) {
-        results.push(item);
+
+      const totalScore = Math.max(nameScore, fileScore);
+      
+      if (totalScore > 0) {
+        scoredResults.push({ item, score: totalScore });
       }
     });
 
-    return results;
+    // Sort by Score Descending
+    return scoredResults
+      .sort((a, b) => b.score - a.score)
+      .map(r => r.item);
+
   }, [mediaItems, searchQuery, activeFilter]);
 
 
