@@ -15,7 +15,7 @@ interface ProcessedFile extends MediaFile {
   is3D?: string | null;
   is4K?: boolean;
   albumName?: string;
-  audioFormat?: string | null; // NEW field
+  audioFormat?: string | null;
 }
 
 const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
@@ -31,7 +31,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         
         const format3D = get3DFormat(file.rawFilename);
         const format4K = get4KFormat(file.rawFilename);
-        // Extract Audio Format (e.g. MP3)
         const audioFormat = getAudioFormat(file.rawFilename);
 
         let epInfo = {};
@@ -134,7 +133,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                      <div className="min-w-0 flex-1 pr-4">
                        <div className="text-sm font-medium text-gray-200 truncate">{file.rawFilename}</div>
                        <div className="flex items-center gap-2 mt-1">
-                          {/* Audio Format Badge for Music */}
                           {file.audioFormat && (
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-600 text-gray-400">
                               {file.audioFormat}
@@ -145,7 +143,8 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                        </div>
                      </div>
                      <div className="text-xs font-mono text-gray-500">
-                       {formatBytes(file.sizeBytes)}
+                       {/* FIX: Check against undefined so 0 is valid */}
+                       {file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}
                      </div>
                    </div>
                  ))}
@@ -231,7 +230,8 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                   <div className="text-right">
                     <div className="text-xs text-gray-500 mb-1">Size</div>
                     <div className="text-sm font-mono font-bold text-white whitespace-nowrap">
-                      {file.sizeBytes ? formatBytes(file.sizeBytes) : '...'}
+                       {/* FIX: Check against undefined so 0 is valid */}
+                       {file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}
                     </div>
                   </div>
                 </div>
