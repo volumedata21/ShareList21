@@ -36,10 +36,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 const cleanupOrphanedUsers = () => {
   if (ALLOWED_USERS.length === 0) return;
 
-  // Create placeholders for SQL (e.g., "?, ?, ?")
   const placeholders = ALLOWED_USERS.map(() => '?').join(',');
-  
-  // Delete anyone NOT in the ALLOWED_USERS list
   const query = `DELETE FROM media_files WHERE owner NOT IN (${placeholders})`;
   
   db.run(query, ALLOWED_USERS, function(err) {
@@ -51,7 +48,6 @@ const cleanupOrphanedUsers = () => {
     }
   });
 };
-// -------------------------
 
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS media_files (
@@ -60,7 +56,6 @@ db.serialize(() => {
   )`);
   db.run("CREATE INDEX IF NOT EXISTS idx_owner ON media_files(owner)");
   
-  // Run cleanup on startup
   cleanupOrphanedUsers();
 });
 
@@ -179,7 +174,16 @@ app.post('/api/sync', requireSecret, async (req, res) => {
 app.get('/api/files', requirePin, (req, res) => {
   db.all('SELECT * FROM media_files ORDER BY filename ASC', (err, rows: any[]) => {
     if (err) { res.status(500).json({ error: err.message }); return; }
-    res.json(rows.map(r => ({ ...r, rawFilename: r.filename })));
+    
+    // UPDATED: Map DB columns (snake_case) to Frontend properties (camelCase)
+    const files = rows.map(r => ({ 
+      ...r, 
+      rawFilename: r.filename,
+      sizeBytes: r.size_bytes, 
+      lastModified: r.last_modified
+    }));
+    
+    res.json(files);
   });
 });
 
