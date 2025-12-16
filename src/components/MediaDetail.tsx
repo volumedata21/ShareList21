@@ -20,6 +20,16 @@ interface ProcessedFile extends MediaFile {
 
 const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
   const [loadedFiles, setLoadedFiles] = useState<ProcessedFile[]>([]);
+  
+  // NEW: State to track which item is currently showing "Copied!"
+  // Value format: "path-filepath" or "name-filepath"
+  const [copiedState, setCopiedState] = useState<string | null>(null);
+
+  const handleCopy = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedState(id);
+    setTimeout(() => setCopiedState(null), 2000);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -130,8 +140,18 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                <div className="space-y-2">
                  {albums[albumName].map(file => (
                    <div key={file.id || file.path} className="flex items-center justify-between bg-gray-900/50 p-3 rounded border border-gray-800 hover:border-gray-600 transition-colors">
+                     
+                     {/* Interactive Filename/Path Area */}
                      <div className="min-w-0 flex-1 pr-4">
-                       <div className="text-sm font-medium text-gray-200 truncate">{file.rawFilename}</div>
+                       <button 
+                         onClick={() => handleCopy(file.rawFilename, `name-${file.path}`)}
+                         className="text-sm font-medium text-gray-200 truncate hover:text-white text-left w-full transition-colors"
+                         title="Click to copy filename"
+                       >
+                         {file.rawFilename}
+                         {copiedState === `name-${file.path}` && <span className="ml-2 text-[10px] text-green-400 font-bold uppercase animate-pulse">Copied!</span>}
+                       </button>
+
                        <div className="flex items-center gap-2 mt-1">
                           {file.audioFormat && (
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-600 text-gray-400">
@@ -139,11 +159,19 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                             </span>
                           )}
                          <span className="text-[10px] uppercase font-bold text-green-500 bg-green-900/20 px-1.5 py-0.5 rounded">{file.owner}</span>
-                         <span className="text-xs text-gray-600 truncate">{file.path}</span>
+                         
+                         {/* Interactive Path */}
+                         <button 
+                           onClick={() => handleCopy(file.path, `path-${file.path}`)}
+                           className="text-xs text-gray-600 truncate hover:text-gray-400 transition-colors max-w-[200px]"
+                           title={file.path}
+                         >
+                           {copiedState === `path-${file.path}` ? <span className="text-green-500 font-bold">COPIED!</span> : file.path}
+                         </button>
                        </div>
                      </div>
+
                      <div className="text-xs font-mono text-gray-500">
-                       {/* FIX: Check against undefined so 0 is valid */}
                        {file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}
                      </div>
                    </div>
@@ -222,15 +250,20 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                       <span className="text-xs text-gray-400">{file.library}</span>
                     </div>
 
-                    <div className="text-xs font-mono text-gray-500 break-all">
+                    {/* CLICK-TO-COPY FILENAME */}
+                    <button 
+                      onClick={() => handleCopy(file.rawFilename, `name-${file.path}`)}
+                      className="text-xs font-mono text-gray-500 break-words hover:text-white transition-colors text-left"
+                      title="Click to copy"
+                    >
                       {file.rawFilename}
-                    </div>
+                      {copiedState === `name-${file.path}` && <span className="ml-2 text-green-400 font-bold uppercase animate-pulse">Copied!</span>}
+                    </button>
                   </div>
 
                   <div className="text-right">
                     <div className="text-xs text-gray-500 mb-1">Size</div>
                     <div className="text-sm font-mono font-bold text-white whitespace-nowrap">
-                       {/* FIX: Check against undefined so 0 is valid */}
                        {file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}
                     </div>
                   </div>
@@ -262,9 +295,19 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                     )}
                   </div>
 
-                  <div className="bg-black/30 p-2 rounded border border-gray-800">
-                    <div className="text-[10px] uppercase text-gray-600 font-bold mb-1">Full Path</div>
-                    <div className="font-mono text-xs text-gray-400 break-all whitespace-normal">
+                  {/* CLICK-TO-COPY PATH */}
+                  <div 
+                    onClick={() => handleCopy(file.path, `path-${file.path}`)}
+                    className="bg-black/30 p-2 rounded border border-gray-800 cursor-pointer hover:border-gray-500 hover:bg-black/50 transition-all group"
+                    title="Click to copy full path"
+                  >
+                    <div className="flex justify-between items-center mb-1">
+                      <div className="text-[10px] uppercase text-gray-600 font-bold group-hover:text-gray-400 transition-colors">Full Path</div>
+                      {copiedState === `path-${file.path}` && (
+                        <span className="text-[10px] font-bold text-green-500 animate-bounce">COPIED!</span>
+                      )}
+                    </div>
+                    <div className="font-mono text-xs text-gray-400 break-words whitespace-normal group-hover:text-white transition-colors">
                       {file.path}
                     </div>
                   </div>
