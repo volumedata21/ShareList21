@@ -187,11 +187,31 @@ const App: React.FC = () => {
 
         if (type === 'TV Show') {
           const series = getSeriesName(file.rawFilename);
-          if (series) name = series;
-          else {
-            const parts = file.path.split('/');
+          if (series) {
+            name = series;
+          } else {
+            // Logic updated to handle shows without Season folders
+            const parts = file.path.replace(/\\/g, '/').split('/');
+            
+            // 1. Try to find "Season XX" folder
             const seasonIdx = parts.findIndex(p => p.toLowerCase().startsWith('season '));
-            if (seasonIdx > 0) name = parts[seasonIdx - 1];
+            if (seasonIdx > 0) {
+              name = parts[seasonIdx - 1];
+            } else {
+              // 2. Fallback: Find "TV Shows" root and take the next folder as Series Name
+              const lowerParts = parts.map(p => p.toLowerCase());
+              const roots = ['tv shows', 'tv', 'shows'];
+              let rootIdx = -1;
+              
+              for (const r of roots) {
+                const idx = lowerParts.lastIndexOf(r);
+                if (idx > rootIdx) rootIdx = idx;
+              }
+
+              if (rootIdx !== -1 && rootIdx + 1 < parts.length) {
+                name = parts[rootIdx + 1];
+              }
+            }
           }
         }
         
@@ -378,7 +398,6 @@ const App: React.FC = () => {
           <div className="flex justify-between items-center mb-4">
             <h1 className="text-xl font-bold flex items-center gap-2"><span className="text-plex-orange">►</span> ShareList21</h1>
             
-            {/* NEW: Right-aligned Actions Group */}
             <div className="flex items-center gap-3">
               <a 
                 href="https://github.com/volumedata21/ShareList21" 
@@ -396,7 +415,6 @@ const App: React.FC = () => {
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
               </button>
             </div>
-            {/* END: Right-aligned Actions Group */}
 
           </div>
           <div className="flex gap-2 mb-4">
