@@ -15,5 +15,6 @@ services:
       - HOST_USER=Joe
       # No MASTER_URL means "I am the Master"
       - MEDIA_ROOT=/media
+      - CRON_SCHEDULE=0 3 * * * # Optional, auto sync at 3 AM
 
 # Generate a SYNC_SECRET using command line: 'openssl rand -hex 32'

@@ -14,16 +14,17 @@ services:
       - "5021:80"
     volumes:
       - ./data:/data
-      # You can add multiple folders
-#     - ./media/movies:/media/movies
-#     - ./tv:/media/tv
+      - ./media/movies:/media/movies
     environment:
-      - ROLE=SERVER
-      - APP_USERS=Joe,Lamar,Josh # Add/remove users here
+      - APP_USERS=Joe,Lamar,Josh # Must add all users here
       - APP_PIN=1234
-      - SYNC_SECRET=a4f9d8c7e6b5a4... # run 'openssl rand -hex 32' for a secure secret
-      - HOST_USER=Joe  # Enables the server to self-scan /media
+      - SYNC_SECRET=REPLACEME # Same secret for everyone
+      - HOST_USER=Joe
+      # No MASTER_URL means "I am the Master"
       - MEDIA_ROOT=/media
+      - CRON_SCHEDULE=0 3 * * * # Optional, auto sync at 3 AM
+
+# Generate a SYNC_SECRET using command line: 'openssl rand -hex 32'
 ```
 
 ### Client compose.yaml
@@ -39,15 +40,19 @@ services:
     image: volumedata21/sharelist21:latest
     container_name: sharelist-client
     restart: unless-stopped
+    ports:
+      - "5021:80" #Frontend
     volumes:
-      - /location/of/Lamar/Media:/media:ro
-#     - /location/of/Lamar/TV:/media/tv:ro
-#     - /location/of/Lamar/Movies:/media/movies:ro
-#     - /location/of/Lamar/Music:/media/music:ro
+      - ./data:/data  # Folder for app's database
+      - /location/of/your/Movies:/media/movies
+#     - /location/of/your/TV:/media/tv
+#     - /location/of/your/Music:/media/music
+#     - /location/of/your/media:/media
     environment:
-      - ROLE=CLIENT
-      - CLIENT_USER=Lamar
-      - SERVER_URL=https://server.url.com # SSL is required on host server
-      - SYNC_SECRET=a4f9d8c7e6b5a4...
-      - CRON_SCHEDULE=0 3 * * * # runs sync every day at 3:00 AM
+      - APP_PIN=1234
+      - SYNC_SECRET=REPLACEME # Must match host's SYNC_SECRET
+      - HOST_USER=Lamar # Your username, must be exactly as written in host's compose file.
+      - MASTER_URL=https://replace-me-with-the-hostserver.com # URL of host's server
+      - MEDIA_ROOT=/media
+      - CRON_SCHEDULE=0 3 * * * # Optional, auto sync at 3 AM
 ```
