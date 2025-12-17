@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { MediaItem, MediaFile } from '../types';
-import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat } from '../utils/mediaUtils';
+import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
 interface MediaDetailProps {
   item: MediaItem;
@@ -14,6 +14,7 @@ interface ProcessedFile extends MediaFile {
   epTitle?: string;
   is3D?: string | null;
   is4K?: boolean;
+  isRemux?: string | null; // NEW
   albumName?: string;
   audioFormat?: string | null;
 }
@@ -21,8 +22,6 @@ interface ProcessedFile extends MediaFile {
 const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
   const [loadedFiles, setLoadedFiles] = useState<ProcessedFile[]>([]);
   const [copiedState, setCopiedState] = useState<string | null>(null);
-  
-  // NEW: State to filter by specific owner
   const [filterOwner, setFilterOwner] = useState<string | null>(null);
 
   const handleCopy = (text: string, id: string) => {
@@ -41,6 +40,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         
         const format3D = get3DFormat(file.rawFilename);
         const format4K = get4KFormat(file.rawFilename);
+        const formatRemux = getRemuxFormat(file.rawFilename); // Detect Remux
         const audioFormat = getAudioFormat(file.rawFilename);
 
         let epInfo = {};
@@ -68,6 +68,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
           lastModified: modified,
           is3D: format3D,
           is4K: format4K,
+          isRemux: formatRemux,
           audioFormat,
           ...epInfo,
           ...musicInfo
@@ -91,7 +92,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     };
 
     setLoadedFiles([]); 
-    setFilterOwner(null); // Reset filter when item changes
+    setFilterOwner(null);
     loadStats();
 
     return () => { mounted = false; };
@@ -99,7 +100,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
   const uniqueOwners = Array.from(new Set(item.files.map(f => f.owner))).sort();
 
-  // FILTER LOGIC: Only show files for the selected owner (or all if null)
   const displayedFiles = filterOwner 
     ? loadedFiles.filter(f => f.owner === filterOwner)
     : loadedFiles;
@@ -137,7 +137,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
         <div className="p-6 space-y-8">
            
-           {/* OWNERS FILTER (For Music too!) */}
            <section>
              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
@@ -151,7 +150,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                    <button 
                      key={owner} 
                      onClick={() => setFilterOwner(isActive ? null : owner)}
-                     className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all duration-200
+                     className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all duration-200 cursor-pointer
                        ${isActive 
                          ? 'bg-green-500 border-green-400 text-black shadow-[0_0_10px_rgba(34,197,94,0.6)] scale-105 font-bold' 
                          : isDimmed
@@ -237,7 +236,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
       <div className="p-6 space-y-8">
         
-        {/* OWNERS FILTER SECTION */}
         <section>
            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
@@ -247,7 +245,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
              {uniqueOwners.map(owner => {
                const isActive = filterOwner === owner;
                const isDimmed = filterOwner && !isActive;
-               
                return (
                  <button 
                    key={owner} 
@@ -322,7 +319,14 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                 <div className="p-4 flex flex-col gap-3">
                   <div className="flex items-center gap-2">
                     
-                    {file.is4K && (
+                    {/* NEW: REMUX Tag */}
+                    {file.isRemux && (
+                      <span className="text-xs font-bold px-2 py-0.5 rounded border border-purple-500 text-purple-300 bg-purple-900/40 shadow-[0_0_8px_rgba(168,85,247,0.3)]">
+                        {file.isRemux}
+                      </span>
+                    )}
+
+                    {file.is4K && !file.isRemux && (
                       <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange shadow-[0_0_8px_rgba(229,160,13,0.3)]">
                         4K UHD
                       </span>
@@ -340,7 +344,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                       </span>
                     )}
 
-                    {!file.is4K && !file.quality && (
+                    {!file.is4K && !file.quality && !file.isRemux && (
                        <span className="text-xs font-bold px-2 py-0.5 rounded border border-gray-600 text-gray-400">Standard</span>
                     )}
                   </div>

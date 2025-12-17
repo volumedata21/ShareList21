@@ -1,6 +1,6 @@
 import React from 'react';
 import { MediaItem } from '../types';
-import { get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat } from '../utils/mediaUtils';
+import { get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
 interface MediaListProps {
   items: MediaItem[];
@@ -40,11 +40,8 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
     );
   }
 
-  // Helper to render the name with Year dimming
   const renderName = (name: string, isSelected: boolean) => {
-    // Split string by "(YYYY)" pattern
     const parts = name.split(/(\(\d{4}\))/g);
-    
     return parts.map((part, i) => {
       if (/^\(\d{4}\)$/.test(part)) {
         return (
@@ -67,6 +64,11 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
         
         const is4K = item.files.some(f => get4KFormat(f.rawFilename));
         
+        // Check for REMUX across all versions
+        const remuxTag = item.files
+          .map(f => getRemuxFormat(f.rawFilename))
+          .find(t => t !== null); // Grab the first one found, usually implies highest quality available
+
         const qualities = Array.from(new Set(
           item.files
             .map(f => {
@@ -110,7 +112,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             
             <div className="flex-1 min-w-0">
               <h3 className="text-sm font-semibold truncate flex items-center gap-2">
-                {/* CHANGED: Use renderName function */}
                 <span className="flex items-center gap-1">
                   {renderName(item.name, selectedId === item.id)}
                 </span>
@@ -146,7 +147,19 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             </div>
 
             <div className="flex flex-row items-center ml-2 gap-1">
-              {is4K && (
+              
+              {/* NEW: REMUX Tag (Highest Priority) */}
+              {remuxTag && (
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm
+                  ${selectedId === item.id 
+                    ? 'border-purple-300 bg-purple-600 text-white' 
+                    : 'border-purple-500 text-purple-300 bg-purple-900/40'}`}>
+                  {remuxTag}
+                </span>
+              )}
+
+              {/* Only show 4K badge if it's NOT a Remux (avoid double badging) */}
+              {is4K && !remuxTag && (
                 <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap
                   ${selectedId === item.id 
                     ? 'border-black/20 bg-black/20 text-white' 
@@ -170,7 +183,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 </span>
               ))}
               
-              {qualities.length === 0 && !is3D && !is4K && (
+              {qualities.length === 0 && !is3D && !is4K && !remuxTag && (
                  <span className={`text-[9px] px-1.5 py-0.5 rounded border 
                  ${selectedId === item.id ? 'border-white/20' : 'border-gray-700 text-gray-600'}`}>
                    STD
