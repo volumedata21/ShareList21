@@ -77,6 +77,19 @@ export const get4KFormat = (filename: string): boolean => {
   return lower.includes('4k') || lower.includes('2160p') || lower.includes('uhd');
 };
 
+// NEW: Detect REMUX and pair with resolution
+export const getRemuxFormat = (filename: string): string | null => {
+  const lower = filename.toLowerCase();
+  if (!lower.includes('remux')) return null;
+
+  if (lower.includes('4k') || lower.includes('2160p')) return 'REMUX-4K';
+  if (lower.includes('1080p')) return 'REMUX-1080';
+  if (lower.includes('720p')) return 'REMUX-720';
+  if (lower.includes('480p')) return 'REMUX-480';
+  
+  return 'REMUX'; // Fallback if no resolution found
+};
+
 export const is4KQualityString = (quality: string | null): boolean => {
   if (!quality) return false;
   const lower = quality.toLowerCase();
@@ -101,7 +114,8 @@ export const cleanName = (filename: string): string => {
     'bluray', 'web-dl', 'webrip', 'dvdrip', 'hdr', 'dv',
     'x264', 'x265', 'hevc', 'aac', 'ac3', 'dts', 'atmos',
     'remastered', 'extended', 'cut', 'uhd',
-    '3d', 'sbs', 'h-sbs', 'hou', 'h-ou'
+    '3d', 'sbs', 'h-sbs', 'hou', 'h-ou',
+    'remux' // NEW: Remove "remux" from title so it doesn't look messy
   ];
   
   const tagRegex = new RegExp(`\\b(${tagsToRemove.join('|')})\\b`, 'gi');
@@ -112,7 +126,6 @@ export const cleanName = (filename: string): string => {
   name = name.replace(/\s*-\s*$/, '');
   name = name.replace(/\s{2,}/g, ' ');
   
-  // NEW: Remove empty brackets that might be left over (e.g., "Movie []")
   name = name.replace(/\[\s*\]/g, "");
   name = name.replace(/\(\s*\)/g, "");
 
