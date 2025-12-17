@@ -21,3 +21,8 @@ compose.dev.yaml
 # 6. Misc
 .DS_Store
 npm-debug.log
+
+# Client Dev Environment
+compose.dev.client.yaml
+media_client_example/
+data_client/
