@@ -20,10 +20,10 @@ interface ProcessedFile extends MediaFile {
 
 const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
   const [loadedFiles, setLoadedFiles] = useState<ProcessedFile[]>([]);
-  
-  // NEW: State to track which item is currently showing "Copied!"
-  // Value format: "path-filepath" or "name-filepath"
   const [copiedState, setCopiedState] = useState<string | null>(null);
+  
+  // NEW: State to filter by specific owner
+  const [filterOwner, setFilterOwner] = useState<string | null>(null);
 
   const handleCopy = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -91,6 +91,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     };
 
     setLoadedFiles([]); 
+    setFilterOwner(null); // Reset filter when item changes
     loadStats();
 
     return () => { mounted = false; };
@@ -98,10 +99,15 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
   const uniqueOwners = Array.from(new Set(item.files.map(f => f.owner))).sort();
 
+  // FILTER LOGIC: Only show files for the selected owner (or all if null)
+  const displayedFiles = filterOwner 
+    ? loadedFiles.filter(f => f.owner === filterOwner)
+    : loadedFiles;
+
   // --- MUSIC RENDER LOGIC ---
   if (item.type === 'Music') {
     const albums: Record<string, ProcessedFile[]> = {};
-    loadedFiles.forEach(f => {
+    displayedFiles.forEach(f => {
       const alb = f.albumName || 'Unknown Album';
       if (!albums[alb]) albums[alb] = [];
       albums[alb].push(f);
@@ -130,6 +136,37 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         </div>
 
         <div className="p-6 space-y-8">
+           
+           {/* OWNERS FILTER (For Music too!) */}
+           <section>
+             <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+               Filter by Owner
+             </h3>
+             <div className="flex flex-wrap gap-2">
+               {uniqueOwners.map(owner => {
+                 const isActive = filterOwner === owner;
+                 const isDimmed = filterOwner && !isActive;
+                 return (
+                   <button 
+                     key={owner} 
+                     onClick={() => setFilterOwner(isActive ? null : owner)}
+                     className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all duration-200
+                       ${isActive 
+                         ? 'bg-green-500 border-green-400 text-black shadow-[0_0_10px_rgba(34,197,94,0.6)] scale-105 font-bold' 
+                         : isDimmed
+                           ? 'bg-gray-800 border-gray-700 text-gray-600 opacity-60 hover:opacity-100 hover:text-gray-400'
+                           : 'bg-green-900/20 border-green-500/50 text-green-100 hover:bg-green-900/40'
+                       }`}
+                   >
+                     <div className={`w-2 h-2 rounded-full shadow-sm ${isActive ? 'bg-black' : 'bg-green-500'}`}></div>
+                     <span className="text-sm">{owner}</span>
+                   </button>
+                 );
+               })}
+             </div>
+           </section>
+
            {Object.keys(albums).sort().map(albumName => (
              <div key={albumName} className="space-y-3">
                <h3 className="text-lg font-bold text-gray-300 border-b border-gray-700 pb-2 flex items-center gap-2">
@@ -140,18 +177,15 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                <div className="space-y-2">
                  {albums[albumName].map(file => (
                    <div key={file.id || file.path} className="flex items-center justify-between bg-gray-900/50 p-3 rounded border border-gray-800 hover:border-gray-600 transition-colors">
-                     
-                     {/* Interactive Filename/Path Area */}
                      <div className="min-w-0 flex-1 pr-4">
                        <button 
                          onClick={() => handleCopy(file.rawFilename, `name-${file.path}`)}
                          className="text-sm font-medium text-gray-200 truncate hover:text-white text-left w-full transition-colors"
-                         title="Click to copy filename"
+                         title="Click to copy"
                        >
                          {file.rawFilename}
                          {copiedState === `name-${file.path}` && <span className="ml-2 text-[10px] text-green-400 font-bold uppercase animate-pulse">Copied!</span>}
                        </button>
-
                        <div className="flex items-center gap-2 mt-1">
                           {file.audioFormat && (
                             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-600 text-gray-400">
@@ -159,8 +193,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                             </span>
                           )}
                          <span className="text-[10px] uppercase font-bold text-green-500 bg-green-900/20 px-1.5 py-0.5 rounded">{file.owner}</span>
-                         
-                         {/* Interactive Path */}
                          <button 
                            onClick={() => handleCopy(file.path, `path-${file.path}`)}
                            className="text-xs text-gray-600 truncate hover:text-gray-400 transition-colors max-w-[200px]"
@@ -170,7 +202,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                          </button>
                        </div>
                      </div>
-
                      <div className="text-xs font-mono text-gray-500">
                        {file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}
                      </div>
@@ -206,18 +237,34 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
       <div className="p-6 space-y-8">
         
+        {/* OWNERS FILTER SECTION */}
         <section>
            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">
              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
-             Owners
+             Filter by Owner
            </h3>
            <div className="flex flex-wrap gap-2">
-             {uniqueOwners.map(owner => (
-               <div key={owner} className="flex items-center gap-2 bg-green-900/20 border border-green-500/50 rounded-full px-3 py-1 shadow-[0_0_10px_rgba(34,197,94,0.1)]">
-                 <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.8)]"></div>
-                 <span className="text-sm font-bold text-green-100">{owner}</span>
-               </div>
-             ))}
+             {uniqueOwners.map(owner => {
+               const isActive = filterOwner === owner;
+               const isDimmed = filterOwner && !isActive;
+               
+               return (
+                 <button 
+                   key={owner} 
+                   onClick={() => setFilterOwner(isActive ? null : owner)}
+                   className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all duration-200 cursor-pointer
+                     ${isActive 
+                       ? 'bg-green-500 border-green-400 text-black shadow-[0_0_10px_rgba(34,197,94,0.6)] scale-105 font-bold' 
+                       : isDimmed
+                         ? 'bg-gray-800 border-gray-700 text-gray-600 opacity-60 hover:opacity-100 hover:text-gray-400'
+                         : 'bg-green-900/20 border-green-500/50 text-green-100 hover:bg-green-900/40'
+                     }`}
+                 >
+                   <div className={`w-2 h-2 rounded-full shadow-sm ${isActive ? 'bg-black' : 'bg-green-500'}`}></div>
+                   <span className="text-sm">{owner}</span>
+                 </button>
+               );
+             })}
            </div>
         </section>
 
@@ -228,7 +275,11 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
           </h3>
 
           <div className="space-y-4">
-            {loadedFiles.map((file) => (
+            {displayedFiles.length === 0 ? (
+                <div className="text-gray-500 italic text-sm p-4 text-center border border-gray-800 rounded bg-gray-900/30">
+                    No files found for this user.
+                </div>
+            ) : displayedFiles.map((file) => (
               <div key={file.id || file.path} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors">
                 
                 <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-start gap-4">
@@ -250,7 +301,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                       <span className="text-xs text-gray-400">{file.library}</span>
                     </div>
 
-                    {/* CLICK-TO-COPY FILENAME */}
                     <button 
                       onClick={() => handleCopy(file.rawFilename, `name-${file.path}`)}
                       className="text-xs font-mono text-gray-500 break-words hover:text-white transition-colors text-left"
@@ -295,7 +345,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                     )}
                   </div>
 
-                  {/* CLICK-TO-COPY PATH */}
                   <div 
                     onClick={() => handleCopy(file.path, `path-${file.path}`)}
                     className="bg-black/30 p-2 rounded border border-gray-800 cursor-pointer hover:border-gray-500 hover:bg-black/50 transition-all group"

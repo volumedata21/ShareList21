@@ -7,12 +7,13 @@ services:
       - "5021:80"
     volumes:
       - ./data:/data
-      # You can add multiple folders
       - ./media/movies:/media/movies
-#     - ./tv:/media/tv
     environment:
-      - ROLE=SERVER
-      - APP_USERS=Joe,Lamar,Josh # Add/remove users here
+      - APP_USERS=Joe,Lamar,Josh # Must add all users here
       - APP_PIN=1234
-      - HOST_USER=Joe  # Enables the server to self-scan /media
+      - SYNC_SECRET=REPLACEME # Same secret for everyone
+      - HOST_USER=Joe
+      # No MASTER_URL means "I am the Master"
       - MEDIA_ROOT=/media
+
+# Generate a SYNC_SECRET using command line: 'openssl rand -hex 32'

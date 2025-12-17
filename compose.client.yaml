@@ -3,14 +3,17 @@ services:
     image: volumedata21/sharelist21:latest
     container_name: sharelist-client
     restart: unless-stopped
+    ports:
+      - "5021:80" #Frontend
     volumes:
-      - /location/of/Lamar/Media:/media:ro
-#     - /location/of/Lamar/TV:/media/tv:ro
-#     - /location/of/Lamar/Movies:/media/movies:ro
-#     - /location/of/Lamar/Music:/media/music:ro
+      - ./data:/data  # Folder for app's database
+      - /location/of/your/Movies:/media/movies
+#     - /location/of/your/TV:/media/tv
+#     - /location/of/your/Music:/media/music
+#     - /location/of/your/media:/media
     environment:
-      - ROLE=CLIENT
-      - CLIENT_USER=Lamar
-      - SERVER_URL=https://server.url.com # SSL is required on host server
-      - SYNC_SECRET=a4f9d8c7e6b5a4... # run 'openssl rand -hex 32' for a secure secret
-      - CRON_SCHEDULE=0 3 * * * # runs sync every day at 3:00 AM
+      - APP_PIN=1234
+      - SYNC_SECRET=REPLACEME # Must match host's SYNC_SECRET
+      - HOST_USER=Lamar # Your username, must be exactly as written in host's compose file.
+      - MASTER_URL=https://replace-me-with-the-hostserver.com # URL of host's server
+      - MEDIA_ROOT=/media
