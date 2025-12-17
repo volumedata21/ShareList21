@@ -25,6 +25,8 @@ const SYNC_SECRET = process.env.SYNC_SECRET;
 const MASTER_URL = process.env.MASTER_URL; 
 const HOST_USER = process.env.HOST_USER || 'Guest'; 
 const MEDIA_ROOT = process.env.MEDIA_ROOT || '/media';
+// NEW: Configurable Schedule (Defaults to 3 AM if missing)
+const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '0 3 * * *';
 
 const ALLOWED_USERS = (process.env.APP_USERS || 'Guest').split(',').map(u => u.trim());
 
@@ -160,7 +162,7 @@ const syncWithMaster = async (localFiles: MediaFile[]) => {
 
   } catch (err: any) {
     console.error(`[Sync Error] Could not reach Master: ${err.message}. Running in Offline Mode.`);
-    throw err; // Re-throw so the UI knows something went wrong if we want
+    throw err; 
   }
 };
 
@@ -187,30 +189,16 @@ app.post('/api/scan', requirePin, async (req, res) => {
     return;
   }
 
-  // Satellite Logic (User clicked Scan)
+  // Satellite Logic
   try {
-    // 1. Scan Local
     const files = await performLocalScan();
-    
-    // 2. Sync with Master (WAIT for this now!)
     if (MASTER_URL) {
       await syncWithMaster(files);
     }
-
-    res.json({ 
-      success: true, 
-      count: files.length, 
-      message: "Sync Complete." 
-    });
+    res.json({ success: true, count: files.length, message: "Sync Complete." });
   } catch (e: any) {
     console.error(e);
-    // Even if sync fails, we return success if local scan worked, 
-    // but maybe warn the user. For now, just logging error.
-    res.json({ 
-      success: true, 
-      count: 0, 
-      message: "Local scan done, but Master sync failed. Showing local files only." 
-    });
+    res.json({ success: true, count: 0, message: "Local scan done, but Master sync failed. Showing local files only." });
   }
 });
 
@@ -256,12 +244,20 @@ app.get('*', (req, res) => {
 
 // --- AUTOMATION ---
 const scheduledScan = async () => {
+  console.log(`[Cron] Starting scheduled scan at ${new Date().toISOString()}`);
   const files = await performLocalScan();
-  // Don't crash the cron if network is down
   try { await syncWithMaster(files); } catch(e) {} 
 };
 
+// Start Up Scan
 setTimeout(scheduledScan, 5000); 
-cron.schedule('0 3 * * *', scheduledScan);
+
+// Cron Schedule
+if (cron.validate(CRON_SCHEDULE)) {
+  cron.schedule(CRON_SCHEDULE, scheduledScan);
+  console.log(`[Cron] Scheduled scans enabled: ${CRON_SCHEDULE}`);
+} else {
+  console.error(`[Cron] Invalid Schedule: ${CRON_SCHEDULE}`);
+}
 
 app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 Server (${MASTER_URL ? 'Satellite' : 'Master'}) running on ${PORT}`));

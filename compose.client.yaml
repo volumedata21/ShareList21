@@ -17,3 +17,4 @@ services:
       - HOST_USER=Lamar # Your username, must be exactly as written in host's compose file.
       - MASTER_URL=https://replace-me-with-the-hostserver.com # URL of host's server
       - MEDIA_ROOT=/media
+      - CRON_SCHEDULE=0 3 * * * # Optional, auto sync at 3 AM
