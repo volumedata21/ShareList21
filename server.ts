@@ -6,7 +6,7 @@ import cron from 'node-cron';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { processFiles } from './scanner';
-import { MediaFile, SyncPayload } from './types';
+import { MediaFile, SyncPayload } from './src/types';
 import http from 'http';
 import https from 'https';
 import { pipeline } from 'stream';
