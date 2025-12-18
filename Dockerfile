@@ -3,9 +3,8 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies
+# Install dependencies (including devDependencies for esbuild/vite)
 COPY package*.json ./
-# CHANGED: 'npm ci' -> 'npm install' to fix lockfile mismatch
 RUN npm install
 
 # Copy Source
@@ -15,7 +14,8 @@ COPY . .
 RUN npm run build
 
 # 2. Build Backend (Esbuild)
-RUN npx esbuild server.ts client.ts \
+# REMOVED: client.ts (No longer needed)
+RUN npx esbuild server.ts \
     --bundle \
     --platform=node \
     --target=node20 \
@@ -31,7 +31,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package*.json ./
-# CHANGED: 'npm ci' -> 'npm install'
+# Install only runtime dependencies (express, sqlite3, rate-limit, etc.)
 RUN npm install --only=production
 
 # Copy Frontend Build
@@ -40,10 +40,9 @@ COPY --from=builder /app/dist ./dist
 # Copy Backend Build (Bundled JS)
 COPY --from=builder /app/dist-server ./dist-server
 
-# Copy Entrypoint
-COPY entrypoint.sh ./
-RUN chmod +x entrypoint.sh
+# REMOVED: entrypoint.sh copy and setup (Not needed)
 
 EXPOSE 80
 
-ENTRYPOINT ["./entrypoint.sh"]
+# NEW: Run the server directly
+CMD ["node", "dist-server/server.js"]

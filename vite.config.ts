@@ -3,7 +3,6 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
-  // Prevent build failure on minor TS errors
   esbuild: {
     ignoreAnnotations: true,
     logOverride: { 'this-is-undefined-in-esm': 'silent' }
@@ -13,8 +12,10 @@ export default defineConfig({
     allowedHosts: true, 
     proxy: {
       '/api': {
-        target: 'http://localhost:80',
-        changeOrigin: true
+        // CHANGED: localhost -> 127.0.0.1 to force IPv4
+        target: 'http://127.0.0.1:80',
+        changeOrigin: true,
+        secure: false,
       }
     }
   }
