@@ -28,8 +28,10 @@ yarn-error.log*
 
 # Local Test Media
 media_example/
+downloads_host/
 
 # Client Dev Environment
 compose.dev.client.yaml
 media_client_example/
 data_client/
+downloads_client/
