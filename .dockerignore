@@ -26,3 +26,6 @@ npm-debug.log
 compose.dev.client.yaml
 media_client_example/
 data_client/
+
+downloads_host
+downloads_client
