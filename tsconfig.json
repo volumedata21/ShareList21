@@ -18,7 +18,7 @@
   },
   "include": [
     "src",       // ONLY look at the frontend source folder
-    "types.ts"   // AND the shared types file
+    "src/types.ts"   // AND the shared types file
   ],
   "exclude": [
     "node_modules", 
