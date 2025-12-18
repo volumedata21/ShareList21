@@ -97,45 +97,45 @@ export const is4KQualityString = (quality: string | null): boolean => {
 };
 
 export const cleanName = (filename: string): string => {
-  let name = filename;
-  let editionText = "";
+  if (!filename) return '';
 
-  const editionMatch = name.match(/\{edition-(.+?)\}/i);
-  if (editionMatch) {
-    editionText = editionMatch[1].trim(); 
-    name = name.replace(editionMatch[0], ""); 
-  }
+  // 1. Remove the file extension (e.g., .mkv, .mp4)
+  let name = filename.replace(/\.[^/.]+$/, "");
 
-  name = name.replace(/\.[^/.]+$/, "");
-  name = name.replace(/[._]/g, " ");
+  // 2. AGGRESSIVE: Remove anything inside square brackets entirely [ ... ]
+  // The regex \[.*?\] matches '[' followed by any characters until the first ']'
+  name = name.replace(/\[.*?\]/g, "");
 
-  const tagsToRemove = [
-    '4k', '2160p', '1080p', '720p', '480p', 'sd',
-    'bluray', 'web-dl', 'webrip', 'dvdrip', 'hdr', 'dv',
-    'x264', 'x265', 'hevc', 'aac', 'ac3', 'dts', 'atmos',
-    'remastered', 'extended', 'cut', 'uhd',
-    '3d', 'sbs', 'h-sbs', 'hou', 'h-ou',
-    'remux' // NEW: Remove "remux" from title so it doesn't look messy
+  // 3. Remove common metadata patterns that might act as suffixes (outside of brackets)
+  // This handles " - 1080p", " (1080p)", etc.
+  const metaPatterns = [
+    /\s?-\s?\d{3,4}p/i,       // - 1080p
+    /\s?\(\d{3,4}p\)/i,       // (1080p)
+    /\s?-\s?4k/i,             // - 4k
+    /\s?uhd/i,                // uhd
+    /\s?bluray/i,             // bluray
+    /\s?web-dl/i,             // web-dl
+    /\s?remux/i,              // remux
+    /\s?h\.?26[45]/i,         // h.264 or h265
+    /\s?hevc/i,               // hevc
+    /\s?10bit/i,              // 10bit
+    /\s?hdr\d*/i,             // hdr, hdr10
+    /\s?aac/i,                // aac
+    /\s?ac3/i,                // ac3
+    /\s?dts/i,                // dts
+    /\s?5\.1/i,               // 5.1
+    /\s?7\.1/i,               // 7.1
   ];
-  
-  const tagRegex = new RegExp(`\\b(${tagsToRemove.join('|')})\\b`, 'gi');
-  name = name.replace(tagRegex, '');
-  
-  name = name.replace(/(\.sbs|\.hou)/gi, '');
-  name = name.replace(/(\(\d{4}\))\s*-\s*$/, '$1');
-  name = name.replace(/\s*-\s*$/, '');
-  name = name.replace(/\s{2,}/g, ' ');
-  
-  name = name.replace(/\[\s*\]/g, "");
-  name = name.replace(/\(\s*\)/g, "");
 
-  name = name.trim();
+  metaPatterns.forEach(pattern => {
+    name = name.replace(pattern, "");
+  });
 
-  if (editionText) {
-    name = `${name} - ${editionText}`;
-  }
-
-  return name;
+  // 4. Cleanup: Remove trailing dashes, dots, or double spaces left behind
+  name = name.replace(/\s{2,}/g, " "); // Turn double spaces into single
+  name = name.replace(/[-.]+$/, "");    // Remove trailing dash or dot
+  
+  return name.trim();
 };
 
 export const fuzzyMatch = (text: string, query: string): boolean => {
