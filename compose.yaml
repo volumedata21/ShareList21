@@ -16,5 +16,6 @@ services:
       # No MASTER_URL means "I am the Master"
       - MEDIA_ROOT=/media
       - CRON_SCHEDULE=0 3 * * * # Optional, auto sync at 3 AM
+      - NODE_URL=http://hosts_server_URL.com:5021
 
 # Generate a SYNC_SECRET using command line: 'openssl rand -hex 32'

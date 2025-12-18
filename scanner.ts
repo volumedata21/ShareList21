@@ -60,8 +60,12 @@ async function scanDirectory(dir: string): Promise<string[]> {
         // 3. EXTENSION CHECK
         const ext = path.extname(res).toLowerCase();
         if (VALID_EXTS.has(ext)) {
-          if (name.toLowerCase().includes('sample') && (await fs.stat(res)).size < 50 * 1024 * 1024) {
-             continue;
+          // Check for Sample files to ignore
+          if (name.toLowerCase().includes('sample')) {
+             try {
+                const size = (await fs.stat(res)).size;
+                if (size < 50 * 1024 * 1024) continue; // Skip samples < 50MB
+             } catch (e) { continue; }
           }
           results.push(res);
         }
@@ -74,19 +78,23 @@ async function scanDirectory(dir: string): Promise<string[]> {
 }
 
 export async function processFiles(mediaRoot: string, owner: string): Promise<MediaFile[]> {
-  console.log(`[Scanner] Starting scan of ${mediaRoot} for user ${owner}...`);
+  // Ensure we have an absolute path to start with
+  const absoluteRoot = path.resolve(mediaRoot);
+  console.log(`[Scanner] Starting scan of ${absoluteRoot} for user ${owner}...`);
   
-  const filePaths = await scanDirectory(mediaRoot);
+  const filePaths = await scanDirectory(absoluteRoot);
   
   const processed = await Promise.all(filePaths.map(async (filePath) => {
     try {
       const stats = await fs.stat(filePath);
-      const relativePath = path.relative(mediaRoot, filePath);
+      
+      // We calculate relative path ONLY to determine the "Library" (e.g. "Movies" vs "TV Shows")
+      const relativePath = path.relative(absoluteRoot, filePath);
       const filename = path.basename(filePath);
       
       // --- QUALITY / 3D DETECTION ---
       // Default to finding resolution (4k, 1080p, etc)
-      let quality = filename.match(/4k|2160p|1080p|720p|sd/i)?.[0] || null;
+      let quality = filename.match(/4k|2160p|1080p|720p|sd/i)?.[0] || '';
       
       // Override if 3D markers are found
       if (/\{edition-3d\}|\.sbs/i.test(filename)) {
@@ -95,7 +103,9 @@ export async function processFiles(mediaRoot: string, owner: string): Promise<Me
 
       const file: MediaFile = {
         rawFilename: filename,
-        path: relativePath,
+        // CHANGED: Store the FULL path so the server can serve/download it later
+        path: filePath, 
+        // Library is the top-level folder name (e.g. "Movies")
         library: relativePath.split(path.sep)[0] || 'Root',
         quality: quality,
         owner: owner,
