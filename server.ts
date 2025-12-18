@@ -23,13 +23,6 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 80;
 
-// --- CONFIGURATION ---
-const MAX_CONCURRENT_DOWNLOADS = 2; 
-
-// --- NETWORK AGENTS ---
-const httpAgent = new http.Agent({ keepAlive: true, timeout: 60000 });
-const httpsAgent = new https.Agent({ keepAlive: true, timeout: 60000 });
-
 app.set('trust proxy', 1);
 
 // --- LIMITERS ---
@@ -47,7 +40,7 @@ const strictLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-// --- DB & ENV ---
+// --- CONFIG ---
 const DB_PATH = '/data/sharelist.db';
 const APP_PIN = process.env.APP_PIN; 
 const SYNC_SECRET = process.env.SYNC_SECRET;
@@ -74,7 +67,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 interface DownloadStatus {
   id: string;
   filename: string;
-  remoteUrl: string;
+  remoteUrl: string; // Store this for Retry logic
   remotePath: string;
   localPath: string;
   totalBytes: number;
@@ -87,7 +80,6 @@ interface DownloadStatus {
 }
 
 const activeDownloads = new Map<string, DownloadStatus>();
-const downloadQueue: string[] = []; 
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
@@ -235,40 +227,16 @@ const ensureDir = (dirPath: string) => {
   }
 };
 
-// --- DOWNLOAD WORKER ---
-
-const processQueue = () => {
-  let activeCount = 0;
-  for (const job of activeDownloads.values()) {
-    if (job.status === 'downloading') activeCount++;
-  }
-
-  while (activeCount < MAX_CONCURRENT_DOWNLOADS && downloadQueue.length > 0) {
-    const nextJobId = downloadQueue.shift(); 
-    if (!nextJobId) break;
-
-    const job = activeDownloads.get(nextJobId);
-    if (!job || job.status === 'cancelled') continue;
-
-    activeCount++;
-    downloadFile(job.remoteUrl, job.remotePath, job.localPath, nextJobId)
-      .catch(err => console.error(`Job ${nextJobId} failed unexpectedly`, err))
-      .finally(() => {
-        processQueue();
-      });
-  }
-};
-
+// --- SINGLE DOWNLOAD FUNCTION (Reverted to standard Agents) ---
 const downloadFile = async (remoteUrl: string, remotePath: string, localPath: string, jobId: string) => {
   if (!DOWNLOAD_ROOT) throw new Error("No Download Root configured.");
   
-  // --- SKIP CHECK ---
+  // SKIP CHECK
   if (fs.existsSync(localPath)) {
     console.log(`[Download SKIP] File already exists: ${localPath}`);
     const job = activeDownloads.get(jobId);
     if (job) {
        const stats = fs.statSync(localPath);
-       // We explicitly set status to 'skipped' here
        activeDownloads.set(jobId, { 
          ...job, 
          status: 'skipped', 
@@ -277,7 +245,7 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
          speed: 0 
        });
     }
-    return; // Stop here. Do not open connection.
+    return; 
   }
 
   const cleanBaseUrl = remoteUrl.replace(/\/$/, '');
@@ -297,12 +265,11 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
   return new Promise<void>((resolve, reject) => {
     const lib = downloadUrl.startsWith('https') ? https : http;
-    const agent = downloadUrl.startsWith('https') ? httpsAgent : httpAgent;
-
+    
+    // REVERTED: Using standard Node networking (no custom agents)
     const req = lib.get(downloadUrl, {
       headers: { 'x-sync-secret': SYNC_SECRET || '' },
-      signal: signal,
-      agent: agent 
+      signal: signal 
     }, (response) => {
       
       if (response.statusCode !== 200) {
@@ -394,6 +361,7 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
 // --- ROUTES ---
 
+// 1. DOWNLOAD (RESTORED SIMPLE LOOP LOGIC)
 app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
   const { path: singlePath, filename: singleFilename, files, owner, folderName } = req.body;
   let newJobs: { remotePath: string, filename: string }[] = [];
@@ -418,9 +386,11 @@ app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
       return;
     }
 
+    // 1. Initialize UI Cards for all items immediately
+    const queueIds: string[] = [];
     newJobs.forEach(item => {
         const jobId = generateId();
-        
+        queueIds.push(jobId);
         activeDownloads.set(jobId, {
             id: jobId,
             filename: item.filename,
@@ -433,37 +403,47 @@ app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
             startTime: Date.now(),
             speed: 0
         });
-
-        downloadQueue.push(jobId);
     });
 
+    // 2. Respond to Frontend immediately
     res.json({ success: true, message: `Queued ${newJobs.length} items...` });
-    processQueue();
+
+    // 3. Process Downloads SEQUENTIALLY (The "Old" Reliable Way)
+    // This loop effectively acts as a queue of 1
+    for (let i = 0; i < newJobs.length; i++) {
+        const jobId = queueIds[i];
+        const job = activeDownloads.get(jobId);
+        
+        // Skip if user cancelled while waiting in line
+        if (!job || job.status === 'cancelled') continue;
+
+        try {
+            await downloadFile(job.remoteUrl, job.remotePath, job.localPath, jobId);
+        } catch (e) {
+            console.error(`[Download Loop] Error on item ${i}`, e);
+        }
+    }
   });
 });
 
+// 2. CANCEL
 app.post('/api/download/cancel', requirePin, (req, res) => {
   const { id } = req.body;
   const job = activeDownloads.get(id);
   
   if (job) {
     if (job.abortController) {
-      job.abortController.abort(); 
+      job.abortController.abort(); // Kills active stream
     }
+    // Mark as cancelled (stops loop from picking it up if pending)
     activeDownloads.set(id, { ...job, status: 'cancelled', speed: 0 });
-    
-    const queueIndex = downloadQueue.indexOf(id);
-    if (queueIndex > -1) {
-        downloadQueue.splice(queueIndex, 1);
-    }
-
     res.json({ success: true, message: "Cancelled" });
-    setTimeout(() => processQueue(), 500); 
   } else {
     res.status(404).json({ error: "Job not found" });
   }
 });
 
+// 3. RETRY (Simple re-trigger)
 app.post('/api/download/retry', requirePin, async (req, res) => {
   const { id } = req.body;
   const job = activeDownloads.get(id);
@@ -471,19 +451,23 @@ app.post('/api/download/retry', requirePin, async (req, res) => {
   if (!job) { return res.status(404).json({ error: "Job not found" }); }
   if (job.status === 'downloading') { return res.status(400).json({ error: "Already downloading" }); }
 
+  // Reset UI
   activeDownloads.set(id, { ...job, status: 'pending', error: undefined, speed: 0 });
-  res.json({ success: true, message: "Re-queued..." });
+  res.json({ success: true, message: "Retrying..." });
 
-  downloadQueue.push(id);
-  processQueue();
+  // Fire off single download
+  try {
+     await downloadFile(job.remoteUrl, job.remotePath, job.localPath, id);
+  } catch(e) {
+     console.error("Retry failed", e);
+  }
 });
 
+// 4. CLEAR COMPLETED
 app.post('/api/downloads/clear', requirePin, (req, res) => {
   for (const [id, job] of activeDownloads.entries()) {
     if (job.status === 'completed' || job.status === 'cancelled' || job.status === 'error' || job.status === 'skipped') {
       activeDownloads.delete(id);
-      const qIdx = downloadQueue.indexOf(id);
-      if (qIdx > -1) downloadQueue.splice(qIdx, 1);
     }
   }
   res.json({ success: true });
@@ -585,4 +569,6 @@ if (cron.validate(CRON_SCHEDULE)) {
   cron.schedule(CRON_SCHEDULE, scheduledScan);
 }
 
-app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 Server running on ${PORT}`));
+// --- SERVER START (KEPT TIMEOUT FIX) ---
+const server = app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 Server running on ${PORT}`));
+server.setTimeout(0); // This is ESSENTIAL for large files, even with simple loops
