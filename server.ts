@@ -24,7 +24,12 @@ const app = express();
 const PORT = 80;
 
 // --- CONFIGURATION ---
-const MAX_CONCURRENT_DOWNLOADS = 2; // <--- NEW LIMIT
+const MAX_CONCURRENT_DOWNLOADS = 2; 
+
+// --- NETWORK AGENTS (NEW: Fixes ECONNRESET) ---
+// Keep connections open to reuse them for batch downloads
+const httpAgent = new http.Agent({ keepAlive: true, timeout: 60000 });
+const httpsAgent = new https.Agent({ keepAlive: true, timeout: 60000 });
 
 app.set('trust proxy', 1);
 
@@ -83,7 +88,7 @@ interface DownloadStatus {
 }
 
 const activeDownloads = new Map<string, DownloadStatus>();
-const downloadQueue: string[] = []; // <--- NEW: Stores IDs of pending jobs
+const downloadQueue: string[] = []; 
 
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
@@ -231,32 +236,26 @@ const ensureDir = (dirPath: string) => {
   }
 };
 
-// --- DOWNLOAD WORKER (NEW) ---
+// --- DOWNLOAD WORKER ---
 
-// This function checks if we can start more downloads
 const processQueue = () => {
-  // Count how many are currently 'downloading'
   let activeCount = 0;
   for (const job of activeDownloads.values()) {
     if (job.status === 'downloading') activeCount++;
   }
 
-  // Fill empty slots
   while (activeCount < MAX_CONCURRENT_DOWNLOADS && downloadQueue.length > 0) {
-    const nextJobId = downloadQueue.shift(); // Get oldest pending job
+    const nextJobId = downloadQueue.shift(); 
     if (!nextJobId) break;
 
     const job = activeDownloads.get(nextJobId);
-    
-    // Safety check: user might have cancelled it while it was in queue
     if (!job || job.status === 'cancelled') continue;
 
-    // Start it
     activeCount++;
     downloadFile(job.remoteUrl, job.remotePath, job.localPath, nextJobId)
       .catch(err => console.error(`Job ${nextJobId} failed unexpectedly`, err))
       .finally(() => {
-        // When this job finishes (success OR fail), trigger the queue again
+        // Trigger next when this one finishes (success or fail)
         processQueue();
       });
   }
@@ -275,7 +274,6 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
   const controller = new AbortController();
   const { signal } = controller;
 
-  // Set Status to Downloading
   const currentStatus = activeDownloads.get(jobId);
   if (currentStatus) {
     activeDownloads.set(jobId, { ...currentStatus, status: 'downloading', abortController: controller });
@@ -283,9 +281,13 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
   return new Promise<void>((resolve, reject) => {
     const lib = downloadUrl.startsWith('https') ? https : http;
+    // UPDATED: Use the Keep-Alive agent
+    const agent = downloadUrl.startsWith('https') ? httpsAgent : httpAgent;
+
     const req = lib.get(downloadUrl, {
       headers: { 'x-sync-secret': SYNC_SECRET || '' },
-      signal: signal 
+      signal: signal,
+      agent: agent // <--- Attach Agent Here
     }, (response) => {
       
       if (response.statusCode !== 200) {
@@ -297,7 +299,6 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
         return;
       }
 
-      // Check for HTML response (Safety)
       const contentType = response.headers['content-type'] || '';
       if (contentType.includes('text/html')) {
         const err = new Error("Remote node returned HTML. Check NODE_URL.");
@@ -324,7 +325,6 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
       const fileStream = fs.createWriteStream(localPath);
 
-      // Speed Tracking
       let lastCheckTime = Date.now();
       let lastCheckBytes = 0;
 
@@ -359,16 +359,19 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
              resolve();
           } else {
              const job = activeDownloads.get(jobId);
-             if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: err.message });
+             // More descriptive errors for ECONNRESET
+             const errMsg = err.code === 'ECONNRESET' ? 'Network Error (Reset)' : err.message;
+             if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: errMsg });
              reject(err);
           }
         });
     });
     
-    req.on('error', (err) => {
+    req.on('error', (err: any) => {
         if (err.name === 'AbortError') return; 
         const job = activeDownloads.get(jobId);
-        if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: err.message });
+        const errMsg = err.code === 'ECONNRESET' ? 'Network Error (Reset)' : err.message;
+        if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: errMsg });
         reject(err);
     });
   });
@@ -377,7 +380,7 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
 // --- ROUTES ---
 
-// 1. QUEUE DOWNLOAD (Updated to use Queue)
+// 1. QUEUE DOWNLOAD
 app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
   const { path: singlePath, filename: singleFilename, files, owner, folderName } = req.body;
   let newJobs: { remotePath: string, filename: string }[] = [];
@@ -408,7 +411,6 @@ app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
         const jobId = generateId();
         addedIds.push(jobId);
         
-        // 1. Create Job (PENDING)
         activeDownloads.set(jobId, {
             id: jobId,
             filename: item.filename,
@@ -417,49 +419,43 @@ app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
             localPath: path.join(DOWNLOAD_ROOT, item.filename),
             totalBytes: 0,
             downloadedBytes: 0,
-            status: 'pending', // Waiting in line
+            status: 'pending', 
             startTime: Date.now(),
             speed: 0
         });
 
-        // 2. Add to Queue
         downloadQueue.push(jobId);
     });
 
     res.json({ success: true, message: `Queued ${newJobs.length} items...` });
-
-    // 3. Trigger Worker
     processQueue();
   });
 });
 
-// 2. CANCEL (Updated)
+// 2. CANCEL
 app.post('/api/download/cancel', requirePin, (req, res) => {
   const { id } = req.body;
   const job = activeDownloads.get(id);
   
   if (job) {
     if (job.abortController) {
-      job.abortController.abort(); // Kills active download
+      job.abortController.abort(); 
     }
     activeDownloads.set(id, { ...job, status: 'cancelled', speed: 0 });
     
-    // Remove from pending queue if it hasn't started yet
     const queueIndex = downloadQueue.indexOf(id);
     if (queueIndex > -1) {
         downloadQueue.splice(queueIndex, 1);
     }
 
     res.json({ success: true, message: "Cancelled" });
-    
-    // Trigger worker (in case we cancelled a running job, freeing up a slot)
     setTimeout(() => processQueue(), 500); 
   } else {
     res.status(404).json({ error: "Job not found" });
   }
 });
 
-// 3. RETRY (Updated to use Queue)
+// 3. RETRY
 app.post('/api/download/retry', requirePin, async (req, res) => {
   const { id } = req.body;
   const job = activeDownloads.get(id);
@@ -467,11 +463,9 @@ app.post('/api/download/retry', requirePin, async (req, res) => {
   if (!job) { return res.status(404).json({ error: "Job not found" }); }
   if (job.status === 'downloading') { return res.status(400).json({ error: "Already downloading" }); }
 
-  // Reset Status
   activeDownloads.set(id, { ...job, status: 'pending', error: undefined, speed: 0 });
   res.json({ success: true, message: "Re-queued..." });
 
-  // Push back to end of queue
   downloadQueue.push(id);
   processQueue();
 });
@@ -481,7 +475,6 @@ app.post('/api/downloads/clear', requirePin, (req, res) => {
   for (const [id, job] of activeDownloads.entries()) {
     if (job.status === 'completed' || job.status === 'cancelled' || job.status === 'error') {
       activeDownloads.delete(id);
-      // Ensure it's not in queue
       const qIdx = downloadQueue.indexOf(id);
       if (qIdx > -1) downloadQueue.splice(qIdx, 1);
     }
@@ -497,7 +490,7 @@ app.get('/api/downloads', requirePin, (req, res) => {
   res.json(downloads);
 });
 
-// --- STANDARD CONFIG ROUTES (Unchanged) ---
+// --- CONFIG ROUTES ---
 app.get('/api/config', (req, res) => {
   res.json({ 
     users: ALLOWED_USERS, 
