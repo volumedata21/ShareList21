@@ -75,7 +75,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                if (item.type === 'Music') return getAudioFormat(f.rawFilename);
                return f.quality;
             })
-            .filter((q): q is string => Boolean(q) && !is4KQualityString(q))
+            .filter((q): q is string => typeof q === 'string' && !is4KQualityString(q))
         )).slice(0, 3);
         
         const owners = Array.from(new Set(item.files.map(f => f.owner))).sort().join(', ');
