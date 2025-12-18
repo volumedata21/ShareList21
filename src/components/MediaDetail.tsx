@@ -24,16 +24,16 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
   const [copiedState, setCopiedState] = useState<string | null>(null);
   const [filterOwner, setFilterOwner] = useState<string | null>(null);
   
-  // State for Download Config & Status
   const [canDownload, setCanDownload] = useState(false);
   const [currentUser, setCurrentUser] = useState<string>('');
-  const [downloadingFile, setDownloadingFile] = useState<string | null>(null);
+  
+  // UPDATED: Use a Set to track multiple files downloading at once
+  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
 
-  // NEW: Accordion State
+  // Accordion State
   const [expandedSeasons, setExpandedSeasons] = useState<Set<number>>(new Set());
 
   useEffect(() => {
-    // Check config for download capability
     fetch('/api/config')
       .then(res => res.json())
       .then((data: AppConfig) => {
@@ -48,34 +48,94 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     setTimeout(() => setCopiedState(null), 2000);
   };
 
-  // Trigger Download
+  // --- SINGLE DOWNLOAD ---
   const handleDownload = async (file: ProcessedFile) => {
     const pin = sessionStorage.getItem('pf_pin') || '';
-    setDownloadingFile(file.path);
+    setDownloadingIds(prev => new Set(prev).add(file.path));
 
     try {
       const res = await fetch('/api/download', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-app-pin': pin 
-        },
+        headers: { 'Content-Type': 'application/json', 'x-app-pin': pin },
         body: JSON.stringify({ 
           path: file.path, 
           filename: file.rawFilename,
           owner: file.owner
         })
       });
-
-      if (!res.ok) throw new Error("Download failed to start");
+      if (!res.ok) throw new Error("Failed");
       
-      // Flash success state then clear
-      setTimeout(() => setDownloadingFile(null), 3000); 
+      // Clear loading state after a delay
+      setTimeout(() => {
+        setDownloadingIds(prev => {
+          const next = new Set(prev);
+          next.delete(file.path);
+          return next;
+        });
+      }, 2000);
     } catch (e) {
       console.error(e);
-      setDownloadingFile(null);
-      alert("Failed to start download. Check console.");
+      setDownloadingIds(prev => {
+         const next = new Set(prev);
+         next.delete(file.path);
+         return next;
+      });
+      alert("Download failed.");
     }
+  };
+
+  // --- NEW: BATCH DOWNLOAD SEASON ---
+  const handleSeasonDownload = async (files: ProcessedFile[]) => {
+    const pin = sessionStorage.getItem('pf_pin') || '';
+    
+    // Filter out files I already own
+    const filesToDownload = files.filter(f => f.owner !== currentUser);
+    
+    if (filesToDownload.length === 0) {
+        alert("You already own all files in this season!");
+        return;
+    }
+
+    // Update UI immediately
+    setDownloadingIds(prev => {
+        const next = new Set(prev);
+        filesToDownload.forEach(f => next.add(f.path));
+        return next;
+    });
+
+    // Group by owner (in case Ep1 is from Joe, Ep2 from Lamar)
+    const filesByOwner: Record<string, ProcessedFile[]> = {};
+    filesToDownload.forEach(f => {
+        if (!filesByOwner[f.owner]) filesByOwner[f.owner] = [];
+        filesByOwner[f.owner].push(f);
+    });
+
+    // Send requests
+    for (const owner of Object.keys(filesByOwner)) {
+        const batch = filesByOwner[owner];
+        try {
+            await fetch('/api/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-app-pin': pin },
+                body: JSON.stringify({ 
+                  files: batch.map(f => ({ path: f.path, rawFilename: f.rawFilename })),
+                  owner: owner,
+                  folderName: item.name // Puts them in a folder named after the show
+                })
+            });
+        } catch (e) {
+            console.error("Batch failed for owner", owner, e);
+        }
+    }
+
+    // Clear loading state after delay
+    setTimeout(() => {
+        setDownloadingIds(prev => {
+          const next = new Set(prev);
+          filesToDownload.forEach(f => next.delete(f.path));
+          return next;
+        });
+    }, 2000);
   };
 
   useEffect(() => {
@@ -134,7 +194,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
            return a.owner.localeCompare(b.owner);
         });
         setLoadedFiles(sorted);
-        // Reset accordion on new item
         setExpandedSeasons(new Set());
       }
     };
@@ -147,12 +206,11 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
   const uniqueOwners = Array.from(new Set(item.files.map(f => f.owner))).sort();
   const displayedFiles = filterOwner ? loadedFiles.filter(f => f.owner === filterOwner) : loadedFiles;
 
-  // NEW: Group logic for Seasons
   const groupedSeasons = useMemo(() => {
     if (item.type !== 'TV Show') return {};
     const groups: Record<number, ProcessedFile[]> = {};
     displayedFiles.forEach(f => {
-      const s = f.epSeason !== undefined ? f.epSeason : 0; // 0 = Specials
+      const s = f.epSeason !== undefined ? f.epSeason : 0; 
       if (!groups[s]) groups[s] = [];
       groups[s].push(f);
     });
@@ -168,118 +226,98 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     });
   };
 
-  // --- HELPER: Renders your existing detailed File Card ---
-  const renderFileCard = (file: ProcessedFile) => (
-    <div key={file.id || file.path} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors mb-4 last:mb-0">
-      <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-start gap-4">
-        <div className="flex-1 min-w-0">
-          {item.type === 'TV Show' && file.epFull ? (
-              <div className="mb-2">
-                <div className="flex items-center gap-2 text-plex-orange font-bold text-lg">
-                  <span>{file.epFull}</span>
-                  {file.epTitle && <span className="text-gray-300 font-normal truncate">- {file.epTitle}</span>}
+  const renderFileCard = (file: ProcessedFile) => {
+    const isDownloading = downloadingIds.has(file.path);
+    
+    return (
+      <div key={file.id || file.path} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors mb-4 last:mb-0">
+        <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-start gap-4">
+          <div className="flex-1 min-w-0">
+            {item.type === 'TV Show' && file.epFull ? (
+                <div className="mb-2">
+                  <div className="flex items-center gap-2 text-plex-orange font-bold text-lg">
+                    <span>{file.epFull}</span>
+                    {file.epTitle && <span className="text-gray-300 font-normal truncate">- {file.epTitle}</span>}
+                  </div>
                 </div>
+            ) : null}
+
+            <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-1.5 bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20">
+                  <span className="text-sm font-extrabold text-green-400 tracking-wide">{file.owner}</span>
               </div>
-          ) : null}
-
-          <div className="flex items-center gap-2 mb-1">
-            <div className="flex items-center gap-1.5 bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20">
-                <span className="text-sm font-extrabold text-green-400 tracking-wide">{file.owner}</span>
+              <span className="text-xs text-gray-600">•</span>
+              <span className="text-xs text-gray-400">{file.library}</span>
             </div>
-            <span className="text-xs text-gray-600">•</span>
-            <span className="text-xs text-gray-400">{file.library}</span>
-          </div>
 
-          <button 
-            onClick={() => handleCopy(file.rawFilename, `name-${file.path}`)}
-            className="text-xs font-mono text-gray-500 break-words hover:text-white transition-colors text-left"
-            title="Click to copy"
-          >
-            {file.rawFilename}
-            {copiedState === `name-${file.path}` && <span className="ml-2 text-green-400 font-bold uppercase animate-pulse">Copied!</span>}
-          </button>
-        </div>
-
-        <div className="flex flex-col items-end gap-2">
-          <div className="text-sm font-mono font-bold text-white whitespace-nowrap">
-              {file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}
-          </div>
-          
-          {/* STANDARD DOWNLOAD BUTTON */}
-          {canDownload && file.owner !== currentUser && (
             <button 
-              onClick={() => handleDownload(file)}
-              disabled={downloadingFile === file.path}
-              className={`text-[10px] font-bold uppercase px-3 py-1.5 rounded flex items-center gap-2 transition-all
-                ${downloadingFile === file.path 
-                  ? 'bg-blue-600/50 text-blue-200 cursor-not-allowed' 
-                  : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg'}`}
+              onClick={() => handleCopy(file.rawFilename, `name-${file.path}`)}
+              className="text-xs font-mono text-gray-500 break-words hover:text-white transition-colors text-left"
+              title="Click to copy"
             >
-              {downloadingFile === file.path ? (
-                <>
-                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                  <span>Starting...</span>
-                </>
-              ) : (
-                <>
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                  <span>Download</span>
-                </>
-              )}
+              {file.rawFilename}
+              {copiedState === `name-${file.path}` && <span className="ml-2 text-green-400 font-bold uppercase animate-pulse">Copied!</span>}
             </button>
-          )}
-        </div>
-      </div>
+          </div>
 
-      <div className="p-4 flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          {file.isRemux && (
-            <span className="text-xs font-bold px-2 py-0.5 rounded border border-purple-500 text-purple-300 bg-purple-900/40 shadow-[0_0_8px_rgba(168,85,247,0.3)]">
-              {file.isRemux}
-            </span>
-          )}
-          {file.is4K && !file.isRemux && (
-            <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange shadow-[0_0_8px_rgba(229,160,13,0.3)]">
-              4K UHD
-            </span>
-          )}
-          {file.is3D && (
-            <span className="text-xs font-bold px-2 py-0.5 rounded border border-blue-400 text-blue-300 bg-blue-900/20 shadow-[0_0_8px_rgba(96,165,250,0.1)]">
-              {file.is3D}
-            </span>
-          )}
-          {file.quality && !is4KQualityString(file.quality) && (
-            <span className="text-xs font-bold px-2 py-0.5 rounded border border-gray-600 text-gray-400">
-              {file.quality}
-            </span>
-          )}
-          {!file.is4K && !file.quality && !file.isRemux && (
-              <span className="text-xs font-bold px-2 py-0.5 rounded border border-gray-600 text-gray-400">Standard</span>
-          )}
-        </div>
-
-        <div 
-          onClick={() => handleCopy(file.path, `path-${file.path}`)}
-          className="bg-black/30 p-2 rounded border border-gray-800 cursor-pointer hover:border-gray-500 hover:bg-black/50 transition-all group"
-          title="Click to copy full path"
-        >
-          <div className="flex justify-between items-center mb-1">
-            <div className="text-[10px] uppercase text-gray-600 font-bold group-hover:text-gray-400 transition-colors">Full Path</div>
-            {copiedState === `path-${file.path}` && (
-              <span className="text-[10px] font-bold text-green-500 animate-bounce">COPIED!</span>
+          <div className="flex flex-col items-end gap-2">
+            <div className="text-sm font-mono font-bold text-white whitespace-nowrap">
+                {file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}
+            </div>
+            
+            {canDownload && file.owner !== currentUser && (
+              <button 
+                onClick={() => handleDownload(file)}
+                disabled={isDownloading}
+                className={`text-[10px] font-bold uppercase px-3 py-1.5 rounded flex items-center gap-2 transition-all
+                  ${isDownloading 
+                    ? 'bg-blue-600/50 text-blue-200 cursor-not-allowed' 
+                    : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg'}`}
+              >
+                {isDownloading ? (
+                  <>
+                    <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span>Queued</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    <span>Download</span>
+                  </>
+                )}
+              </button>
             )}
           </div>
-          <div className="font-mono text-xs text-gray-400 break-words whitespace-normal group-hover:text-white transition-colors">
-            {file.path}
+        </div>
+
+        <div className="p-4 flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            {/* Tags */}
+            {file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded border border-purple-500 text-purple-300 bg-purple-900/40">{file.isRemux}</span>}
+            {file.is4K && !file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange">4K UHD</span>}
+            {file.is3D && <span className="text-xs font-bold px-2 py-0.5 rounded border border-blue-400 text-blue-300 bg-blue-900/20">{file.is3D}</span>}
+            {file.quality && !is4KQualityString(file.quality) && <span className="text-xs font-bold px-2 py-0.5 rounded border border-gray-600 text-gray-400">{file.quality}</span>}
+          </div>
+
+          <div 
+            onClick={() => handleCopy(file.path, `path-${file.path}`)}
+            className="bg-black/30 p-2 rounded border border-gray-800 cursor-pointer hover:border-gray-500 hover:bg-black/50 transition-all group"
+          >
+            <div className="flex justify-between items-center mb-1">
+              <div className="text-[10px] uppercase text-gray-600 font-bold group-hover:text-gray-400 transition-colors">Full Path</div>
+              {copiedState === `path-${file.path}` && <span className="text-[10px] font-bold text-green-500 animate-bounce">COPIED!</span>}
+            </div>
+            <div className="font-mono text-xs text-gray-400 break-words whitespace-normal group-hover:text-white transition-colors">
+              {file.path}
+            </div>
           </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  // --- MUSIC RENDER LOGIC ---
+  // --- MUSIC RENDER ---
   if (item.type === 'Music') {
-    // ... (Your existing Music render logic unchanged) ...
     const albums: Record<string, ProcessedFile[]> = {};
     displayedFiles.forEach(f => {
       const alb = f.albumName || 'Unknown Album';
@@ -291,14 +329,11 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
     return (
       <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
-        {/* ... Music Header ... */}
         <div className="p-6 border-b border-gray-700 flex justify-between items-start sticky top-0 bg-gray-800 z-10 shadow-md">
           <div className="flex-1 mr-4">
             <h2 className="text-2xl font-bold text-white break-words leading-tight">{item.name}</h2>
             <div className="flex gap-2 mt-3 items-center">
-              <span className="px-2 py-0.5 bg-plex-orange text-black text-xs font-bold rounded uppercase tracking-wider">
-                {isAlbumView ? 'Music Album' : 'Music Artist'}
-              </span>
+              <span className="px-2 py-0.5 bg-plex-orange text-black text-xs font-bold rounded uppercase tracking-wider">{isAlbumView ? 'Music Album' : 'Music Artist'}</span>
               {!isAlbumView && (<span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs font-bold rounded">{albumCount} Albums</span>)}
             </div>
           </div>
@@ -316,38 +351,39 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
              <div key={albumName} className="space-y-3">
                <h3 className="text-lg font-bold text-gray-300 border-b border-gray-700 pb-2 flex items-center gap-2"><svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>{albumName}</h3>
                <div className="space-y-2">
-                 {albums[albumName].map(file => (
-                   <div key={file.id || file.path} className="flex items-center justify-between bg-gray-900/50 p-3 rounded border border-gray-800 hover:border-gray-600 transition-colors group">
-                     <div className="min-w-0 flex-1 pr-4">
-                       <div className="text-sm font-medium text-gray-200 truncate">{file.rawFilename}</div>
-                       <div className="flex items-center gap-2 mt-1">
-                         {file.audioFormat && (<span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-600 text-gray-400">{file.audioFormat}</span>)}
-                         <span className="text-[10px] uppercase font-bold text-green-500 bg-green-900/20 px-1.5 py-0.5 rounded">{file.owner}</span>
-                         <span className="text-xs text-gray-600 truncate">{file.path}</span>
+                 {albums[albumName].map(file => {
+                     const isDownloading = downloadingIds.has(file.path);
+                     return (
+                       <div key={file.id || file.path} className="flex items-center justify-between bg-gray-900/50 p-3 rounded border border-gray-800 hover:border-gray-600 transition-colors group">
+                         <div className="min-w-0 flex-1 pr-4">
+                           <div className="text-sm font-medium text-gray-200 truncate">{file.rawFilename}</div>
+                           <div className="flex items-center gap-2 mt-1">
+                             {file.audioFormat && (<span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-600 text-gray-400">{file.audioFormat}</span>)}
+                             <span className="text-[10px] uppercase font-bold text-green-500 bg-green-900/20 px-1.5 py-0.5 rounded">{file.owner}</span>
+                           </div>
+                         </div>
+                         <div className="flex items-center gap-3">
+                           <div className="text-xs font-mono text-gray-500">{file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}</div>
+                           {canDownload && file.owner !== currentUser && (
+                             <button 
+                               onClick={() => handleDownload(file)}
+                               disabled={isDownloading}
+                               className={`p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 focus:opacity-100
+                                 ${isDownloading 
+                                   ? 'bg-blue-600/50 text-blue-200 cursor-not-allowed opacity-100' 
+                                   : 'bg-gray-700 hover:bg-blue-600 text-gray-300 hover:text-white'}`}
+                             >
+                                {isDownloading ? (
+                                   <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                ) : (
+                                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                )}
+                             </button>
+                           )}
+                         </div>
                        </div>
-                     </div>
-                     <div className="flex items-center gap-3">
-                       <div className="text-xs font-mono text-gray-500">{file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}</div>
-                       {canDownload && file.owner !== currentUser && (
-                         <button 
-                           onClick={() => handleDownload(file)}
-                           disabled={downloadingFile === file.path}
-                           className={`p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 focus:opacity-100
-                             ${downloadingFile === file.path 
-                               ? 'bg-blue-600/50 text-blue-200 cursor-not-allowed opacity-100' 
-                               : 'bg-gray-700 hover:bg-blue-600 text-gray-300 hover:text-white'}`}
-                           title="Download Track"
-                         >
-                            {downloadingFile === file.path ? (
-                               <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                            ) : (
-                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                            )}
-                         </button>
-                       )}
-                     </div>
-                   </div>
-                 ))}
+                     );
+                 })}
                </div>
              </div>
            ))}
@@ -356,7 +392,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     );
   }
 
-  // --- STANDARD / TV SHOW RENDER LOGIC ---
+  // --- STANDARD / TV SHOW RENDER ---
   return (
     <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
       {/* Header */}
@@ -399,32 +435,50 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
              <div className="text-gray-500 italic text-sm p-4 text-center border border-gray-800 rounded bg-gray-900/30">No files found for this user.</div>
           ) : (
              <>
-               {/* BRANCH LOGIC: TV SHOW vs MOVIE */}
+               {/* TV SHOWS (With Season Download) */}
                {item.type === 'TV Show' ? (
-                 // --- COLLAPSIBLE ACCORDION LAYOUT ---
                  <div className="space-y-4">
                    {Object.keys(groupedSeasons).map(k => Number(k)).sort((a,b) => a - b).map(seasonNum => {
                      const isExpanded = expandedSeasons.has(seasonNum);
                      const files = groupedSeasons[seasonNum];
                      const seasonTitle = seasonNum === 0 ? 'Specials' : `Season ${seasonNum}`;
+                     
+                     // Check if there's anything to download in this season
+                     const downloadableFiles = files.filter(f => f.owner !== currentUser);
+                     const hasDownloads = canDownload && downloadableFiles.length > 0;
 
                      return (
                        <div key={seasonNum} className="border border-gray-800 rounded-lg overflow-hidden bg-gray-800/30">
                          {/* Header */}
-                         <button 
-                           onClick={() => toggleSeason(seasonNum)}
-                           className="w-full flex justify-between items-center p-4 bg-gray-800/50 hover:bg-gray-800 transition-colors"
-                         >
-                           <div className="flex items-center gap-3">
+                         <div className="flex justify-between items-center p-4 bg-gray-800/50 hover:bg-gray-800 transition-colors">
+                           
+                           {/* Click to Expand */}
+                           <button 
+                             onClick={() => toggleSeason(seasonNum)}
+                             className="flex items-center gap-3 flex-1 text-left"
+                           >
                              <span className={`transform transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}>
                                <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                                </svg>
                              </span>
-                             <h3 className="text-lg font-bold text-gray-200">{seasonTitle}</h3>
-                           </div>
-                           <span className="text-xs text-gray-500 font-mono">{files.length} Episodes</span>
-                         </button>
+                             <div>
+                                <h3 className="text-lg font-bold text-gray-200">{seasonTitle}</h3>
+                                <span className="text-xs text-gray-500 font-mono">{files.length} Episodes</span>
+                             </div>
+                           </button>
+
+                           {/* DOWNLOAD SEASON BUTTON (Prevent expansion click) */}
+                           {hasDownloads && (
+                               <button
+                                 onClick={(e) => { e.stopPropagation(); handleSeasonDownload(downloadableFiles); }}
+                                 className="flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold uppercase transition-colors shadow-lg border border-blue-400/50"
+                               >
+                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                  Download Season
+                               </button>
+                           )}
+                         </div>
 
                          {/* Body */}
                          {isExpanded && (
@@ -437,7 +491,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                    })}
                  </div>
                ) : (
-                 // --- FLAT LIST LAYOUT (Movies) ---
+                 /* MOVIES (Flat List) */
                  <div className="space-y-4">
                    {displayedFiles.map(file => renderFileCard(file))}
                  </div>
