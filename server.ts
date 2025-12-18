@@ -6,7 +6,7 @@ import cron from 'node-cron';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { processFiles } from './scanner';
-import { MediaFile, SyncPayload } from './src/types';
+import { MediaFile, SyncPayload } from './types';
 import http from 'http';
 import https from 'https';
 import { pipeline } from 'stream';
@@ -25,37 +25,33 @@ const PORT = 80;
 
 // --- DEBUG LOGGER ---
 app.use((req, res, next) => {
-  if (!req.url.startsWith('/api/downloads')) { // Reduce noise from polling
+  if (!req.url.startsWith('/api/downloads')) { 
     console.log(`[Incoming Request] ${req.method} ${req.url}`);
   }
   next();
 });
 
-// --- SECURITY: TRUST PROXY ---
 app.set('trust proxy', 1);
 
-// --- SECURITY: RATE LIMITERS ---
+// --- LIMITERS ---
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
   max: 1000, 
   standardHeaders: true, 
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later." }
 });
 
 const strictLimiter = rateLimit({
   windowMs: 60 * 1000, 
-  max: 10, 
+  max: 500, // Higher limit to allow multiple download starts
   standardHeaders: true, 
   legacyHeaders: false,
-  message: { error: "Too many attempts. You are temporarily blocked." }
 });
 
+// --- CONFIG & DB ---
 const DB_PATH = '/data/sharelist.db';
 const APP_PIN = process.env.APP_PIN; 
 const SYNC_SECRET = process.env.SYNC_SECRET;
-
-// CONFIGURATION
 const MASTER_URL = process.env.MASTER_URL; 
 const NODE_URL = process.env.NODE_URL || ''; 
 const HOST_USER = process.env.HOST_USER || 'Guest'; 
@@ -75,15 +71,22 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   else console.log(`Connected to SQLite DB. Running as user: ${HOST_USER}`);
 });
 
-// --- DOWNLOAD TRACKING STATE (NEW) ---
+// --- DOWNLOAD STATE ---
 interface DownloadStatus {
   id: string;
   filename: string;
+  // Metadata for Retry
+  remoteUrl: string;
+  remotePath: string;
+  localPath: string;
+  // Stats
   totalBytes: number;
   downloadedBytes: number;
-  status: 'pending' | 'downloading' | 'completed' | 'error';
+  status: 'pending' | 'downloading' | 'completed' | 'error' | 'cancelled';
   startTime: number;
+  speed: number; // bytes per second
   error?: string;
+  abortController?: AbortController; // Excluded from JSON response
 }
 
 const activeDownloads = new Map<string, DownloadStatus>();
@@ -91,7 +94,6 @@ const activeDownloads = new Map<string, DownloadStatus>();
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 // --- DB HELPERS ---
-
 const registerNode = (owner: string, url: string): Promise<void> => {
   return new Promise((resolve, reject) => {
     db.run(`INSERT INTO nodes (owner, url) VALUES (?, ?) 
@@ -127,7 +129,6 @@ const updateExternalCache = (files: MediaFile[], nodes: {owner:string, url:strin
   return new Promise((resolve, reject) => {
     db.serialize(() => {
       db.run('BEGIN TRANSACTION');
-      
       const nodeStmt = db.prepare(`INSERT INTO nodes (owner, url) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET url=excluded.url`);
       nodes.forEach(n => nodeStmt.run(n.owner, n.url));
       nodeStmt.finalize();
@@ -158,7 +159,6 @@ const cleanupOrphanedUsers = () => {
   db.run(query, ALLOWED_USERS, (err) => { if (err) console.error(err); });
 };
 
-// Enable WAL mode for better concurrency
 db.serialize(() => {
   db.run("PRAGMA journal_mode = WAL;"); 
   db.run(`CREATE TABLE IF NOT EXISTS media_files (
@@ -183,7 +183,6 @@ app.use(generalLimiter);
 const requirePin = async (req: Request, res: Response, next: NextFunction) => {
   if (!APP_PIN) return next();
   const provided = req.headers['x-app-pin'];
-  
   if (String(provided) !== String(APP_PIN)) {
      await new Promise(resolve => setTimeout(resolve, 1000));
      return res.status(401).json({ error: 'Invalid PIN' });
@@ -193,7 +192,6 @@ const requirePin = async (req: Request, res: Response, next: NextFunction) => {
 
 const requireSecret = async (req: Request, res: Response, next: NextFunction) => {
   if (!SYNC_SECRET) return res.status(500).json({ error: 'No Sync Secret set.' });
-  
   if (String(req.headers['x-sync-secret']) !== String(SYNC_SECRET)) {
      await new Promise(resolve => setTimeout(resolve, 1000));
      return res.status(401).json({ error: 'Unauthorized' });
@@ -201,27 +199,20 @@ const requireSecret = async (req: Request, res: Response, next: NextFunction) =>
   next();
 };
 
-// --- CORE LOGIC ---
-
+// --- CORE SCAN/SYNC LOGIC ---
 const performLocalScan = async () => {
-  if (!fs.existsSync(MEDIA_ROOT)) {
-    console.warn(`[Scanner] Media folder ${MEDIA_ROOT} not found. Skipping.`);
-    return [];
-  }
+  if (!fs.existsSync(MEDIA_ROOT)) return [];
   console.log(`[Scanner] Scanning local media for ${HOST_USER}...`);
   const files = await processFiles(MEDIA_ROOT, HOST_USER);
   await replaceUserFiles(HOST_USER, files); 
   if (NODE_URL) await registerNode(HOST_USER, NODE_URL);
-  
   console.log(`[Scanner] Local DB updated with ${files.length} files.`);
   return files;
 };
 
 const syncWithMaster = async (localFiles: MediaFile[]) => {
   if (!MASTER_URL) return; 
-
   console.log(`[Sync] Connecting to Master: ${MASTER_URL}`);
-
   try {
     const pushRes = await fetch(`${MASTER_URL}/api/sync`, {
       method: 'POST',
@@ -229,7 +220,6 @@ const syncWithMaster = async (localFiles: MediaFile[]) => {
       body: JSON.stringify({ owner: HOST_USER, url: NODE_URL, files: localFiles })
     });
     if (!pushRes.ok) throw new Error(`Push failed: ${pushRes.statusText}`);
-    console.log("[Sync] Push successful.");
 
     const pullRes = await fetch(`${MASTER_URL}/api/files`, { headers: { 'x-app-pin': APP_PIN || '' } });
     if (!pullRes.ok) throw new Error(`Pull failed: ${pullRes.statusText}`);
@@ -239,10 +229,8 @@ const syncWithMaster = async (localFiles: MediaFile[]) => {
         await updateExternalCache(data.files, data.nodes);
         console.log(`[Sync] Pull successful. Cache updated with ${data.files.length} remote items.`);
     }
-
   } catch (err: any) {
     console.error(`[Sync Error] Could not reach Master: ${err.message}.`);
-    throw err; 
   }
 };
 
@@ -252,28 +240,37 @@ const ensureDir = (dirPath: string) => {
   }
 };
 
-// --- UPDATED DOWNLOAD FUNCTION (With Tracking) ---
+// --- ROBUST DOWNLOAD FUNCTION ---
 const downloadFile = async (remoteUrl: string, remotePath: string, localPath: string, jobId: string) => {
   if (!DOWNLOAD_ROOT) throw new Error("No Download Root configured.");
   if (!SYNC_SECRET) throw new Error("Missing Sync Secret");
 
+  // Sanitize URL
+  const cleanBaseUrl = remoteUrl.replace(/\/$/, '');
   const encodedPath = encodeURIComponent(remotePath);
-  const downloadUrl = `${remoteUrl}/api/serve?path=${encodedPath}`;
+  const downloadUrl = `${cleanBaseUrl}/api/serve?path=${encodedPath}`;
 
   ensureDir(path.dirname(localPath));
   console.log(`[Download] Fetching from ${downloadUrl}`);
 
+  // Create AbortController for Cancellation
+  const controller = new AbortController();
+  const { signal } = controller;
+
   // Set Status to Downloading
   const currentStatus = activeDownloads.get(jobId);
   if (currentStatus) {
-    activeDownloads.set(jobId, { ...currentStatus, status: 'downloading' });
+    activeDownloads.set(jobId, { ...currentStatus, status: 'downloading', abortController: controller });
   }
 
   return new Promise<void>((resolve, reject) => {
     const lib = downloadUrl.startsWith('https') ? https : http;
     const req = lib.get(downloadUrl, {
-      headers: { 'x-sync-secret': SYNC_SECRET }
+      headers: { 'x-sync-secret': SYNC_SECRET },
+      signal: signal 
     }, (response) => {
+      
+      // 1. Status Check
       if (response.statusCode !== 200) {
         const err = new Error(`Remote Node responded with ${response.statusCode}`);
         if (activeDownloads.has(jobId)) {
@@ -283,51 +280,81 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
         return;
       }
 
-      // Capture Total Size
+      // 2. HTML Check (Prevents downloading Index.html)
+      const contentType = response.headers['content-type'] || '';
+      if (contentType.includes('text/html')) {
+        const err = new Error("Remote node returned HTML. Check NODE_URL.");
+        console.error(`[Download Error] Remote returned HTML for: ${downloadUrl}`);
+        if (activeDownloads.has(jobId)) {
+             activeDownloads.set(jobId, { ...activeDownloads.get(jobId)!, status: 'error', error: "Config Error: HTML Response" });
+        }
+        response.resume(); // Drain stream
+        reject(err);
+        return;
+      }
+
+      // 3. Update Size
       const totalSize = parseInt(response.headers['content-length'] || '0', 10);
       if (activeDownloads.has(jobId)) {
         activeDownloads.get(jobId)!.totalBytes = totalSize;
       }
 
-      // Handle 0 Byte files (Create empty file and exit)
+      // 4. Handle 0 Byte files
       if (totalSize === 0) {
         fs.closeSync(fs.openSync(localPath, 'w'));
-        activeDownloads.set(jobId, { ...activeDownloads.get(jobId)!, status: 'completed', downloadedBytes: 0 });
+        const job = activeDownloads.get(jobId);
+        if (job) activeDownloads.set(jobId, { ...job, status: 'completed', downloadedBytes: 0 });
         resolve();
         return;
       }
 
       const fileStream = fs.createWriteStream(localPath);
 
-      // TRACK PROGRESS
+      // 5. Speed Metrics
+      let lastCheckTime = Date.now();
+      let lastCheckBytes = 0;
+
       response.on('data', (chunk) => {
         const job = activeDownloads.get(jobId);
         if (job) {
           job.downloadedBytes += chunk.length;
+          
+          // Calculate Speed every 1s
+          const now = Date.now();
+          if (now - lastCheckTime > 1000) {
+            const bytesDiff = job.downloadedBytes - lastCheckBytes;
+            const timeDiff = (now - lastCheckTime) / 1000;
+            job.speed = Math.floor(bytesDiff / timeDiff);
+            
+            lastCheckTime = now;
+            lastCheckBytes = job.downloadedBytes;
+          }
           activeDownloads.set(jobId, job);
         }
       });
 
       streamPipeline(response, fileStream)
         .then(() => {
-          // Success
           const job = activeDownloads.get(jobId);
-          if (job) activeDownloads.set(jobId, { ...job, status: 'completed' });
-          
-          // Clear from memory after 30 seconds to allow UI to see "Done"
-          setTimeout(() => activeDownloads.delete(jobId), 30000); 
+          if (job) activeDownloads.set(jobId, { ...job, status: 'completed', speed: 0 });
+          // NO AUTO DELETE. User clears manually.
           resolve();
         })
         .catch((err) => {
-          // Stream Error
-          const job = activeDownloads.get(jobId);
-          if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: err.message });
-          reject(err);
+          if (err.code === 'ABORT_ERR') {
+             console.log(`[Download] Job ${jobId} cancelled.`);
+             try { fs.unlinkSync(localPath); } catch(e) {} // Clean up partial
+             resolve();
+          } else {
+             const job = activeDownloads.get(jobId);
+             if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: err.message });
+             reject(err);
+          }
         });
     });
     
     req.on('error', (err) => {
-        // Request Error
+        if (err.name === 'AbortError') return; 
         const job = activeDownloads.get(jobId);
         if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: err.message });
         reject(err);
@@ -338,13 +365,11 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
 // --- ROUTES ---
 
-// 1. DOWNLOAD (Queue & Track)
+// 1. QUEUE DOWNLOAD
 app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
   const { path: singlePath, filename: singleFilename, files, owner, folderName } = req.body;
-
   let downloadQueue: { remotePath: string, filename: string }[] = [];
 
-  // Build the queue based on whether it's a single file or a batch (album)
   if (files && Array.isArray(files)) {
     downloadQueue = files.map((f: any) => ({
       remotePath: f.path,
@@ -357,59 +382,111 @@ app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
     return;
   }
 
-  if (!owner) {
-    res.status(400).json({ error: "Missing owner" });
-    return;
-  }
+  if (!owner) { res.status(400).json({ error: "Missing owner" }); return; }
 
   db.get('SELECT url FROM nodes WHERE owner = ?', [owner], async (err, row: any) => {
     if (err || !row || !row.url) {
-      console.error(`[Download] No URL found for user: ${owner}`);
       res.status(404).json({ error: `No known URL for user ${owner}` });
       return;
     }
 
-    // Initialize Status for All Items
     const queueIds: string[] = [];
     downloadQueue.forEach(item => {
         const jobId = generateId();
         queueIds.push(jobId);
+        
+        // Save Metadata for Retry
         activeDownloads.set(jobId, {
             id: jobId,
             filename: item.filename,
+            remoteUrl: row.url,
+            remotePath: item.remotePath,
+            localPath: path.join(DOWNLOAD_ROOT, item.filename),
             totalBytes: 0,
             downloadedBytes: 0,
             status: 'pending',
-            startTime: Date.now()
+            startTime: Date.now(),
+            speed: 0
         });
     });
 
-    res.json({ success: true, message: `Queued ${downloadQueue.length} items from ${owner}...` });
+    res.json({ success: true, message: `Queued ${downloadQueue.length} items...` });
 
-    // Process Download Queue Sequentially
+    // Process background downloads
     for (let i = 0; i < downloadQueue.length; i++) {
-      const item = downloadQueue[i];
       const jobId = queueIds[i];
+      const job = activeDownloads.get(jobId);
+      
+      if (!job || job.status === 'cancelled') continue;
       
       try {
-        const targetPath = path.join(DOWNLOAD_ROOT, item.filename);
-        await downloadFile(row.url, item.remotePath, targetPath, jobId);
-        console.log(`[Download] Success: ${item.filename}`);
+        await downloadFile(job.remoteUrl, job.remotePath, job.localPath, jobId);
       } catch (e) {
-        console.error(`[Download] Failed: ${item.filename}`, e);
-        // Status updated to 'error' inside downloadFile
+        console.error(`[Download] Failed: ${job.filename}`, e);
       }
     }
   });
 });
 
-// 2. DOWNLOAD STATUS (NEW)
+// 2. CANCEL DOWNLOAD
+app.post('/api/download/cancel', requirePin, (req, res) => {
+  const { id } = req.body;
+  const job = activeDownloads.get(id);
+  
+  if (job) {
+    if (job.abortController) {
+      job.abortController.abort(); // Triggers AbortError in stream
+    }
+    activeDownloads.set(id, { ...job, status: 'cancelled', speed: 0 });
+    res.json({ success: true, message: "Cancelled" });
+    
+    // Auto-remove cancelled from list after 2s? No, keep it so user sees it was cancelled.
+    // setTimeout(() => activeDownloads.delete(id), 2000);
+  } else {
+    res.status(404).json({ error: "Job not found" });
+  }
+});
+
+// 3. RETRY DOWNLOAD
+app.post('/api/download/retry', requirePin, async (req, res) => {
+  const { id } = req.body;
+  const job = activeDownloads.get(id);
+
+  if (!job) { return res.status(404).json({ error: "Job not found" }); }
+  if (job.status === 'downloading') { return res.status(400).json({ error: "Already downloading" }); }
+
+  // Reset Status
+  activeDownloads.set(id, { ...job, status: 'pending', error: undefined, speed: 0 });
+  res.json({ success: true, message: "Retrying..." });
+
+  // Trigger Logic Again
+  try {
+     await downloadFile(job.remoteUrl, job.remotePath, job.localPath, id);
+  } catch(e) {
+     console.error("Retry failed", e);
+  }
+});
+
+// 4. CLEAR COMPLETED
+app.post('/api/downloads/clear', requirePin, (req, res) => {
+  for (const [id, job] of activeDownloads.entries()) {
+    if (job.status === 'completed' || job.status === 'cancelled' || job.status === 'error') {
+      activeDownloads.delete(id);
+    }
+  }
+  res.json({ success: true });
+});
+
+// 5. GET STATUS
 app.get('/api/downloads', requirePin, (req, res) => {
-  const downloads = Array.from(activeDownloads.values()).sort((a,b) => b.startTime - a.startTime);
+  // Strip internal fields
+  const downloads = Array.from(activeDownloads.values())
+    .map(({ abortController, ...rest }) => rest)
+    .sort((a,b) => b.startTime - a.startTime);
   res.json(downloads);
 });
 
-// 3. CONFIG
+// --- STANDARD CONFIG ROUTES ---
 app.get('/api/config', (req, res) => {
   res.json({ 
     users: ALLOWED_USERS, 
@@ -419,36 +496,25 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-// 4. SERVE FILE
 app.get('/api/serve', strictLimiter, requireSecret, (req, res) => {
   const requestPath = req.query.path as string;
   if (!requestPath) { res.status(400).send('Missing path'); return; }
   
-  // SECURITY: Prevent Directory Traversal
   const absolutePath = path.resolve(requestPath); 
   const allowedRoot = path.resolve(MEDIA_ROOT);
-  const isAllowed = absolutePath.startsWith(allowedRoot) && 
-                   (absolutePath.length === allowedRoot.length || 
-                    absolutePath[allowedRoot.length] === path.sep);
+  const isAllowed = absolutePath.startsWith(allowedRoot);
 
-  if (!isAllowed) {
-    console.warn(`[Security Block] Access outside media root: ${absolutePath}`);
-    res.status(403).send('Access Denied');
+  if (!isAllowed || !fs.existsSync(absolutePath)) {
+    res.status(404).send('File not found or Access Denied');
     return;
   }
   
-  if (!fs.existsSync(absolutePath)) {
-    console.error(`[Serve] File not found: ${absolutePath}`);
-    res.status(404).send('File not found');
-    return;
-  }
   const stat = fs.statSync(absolutePath);
   const head = { 'Content-Length': stat.size, 'Content-Type': 'application/octet-stream' };
   res.writeHead(200, head);
   fs.createReadStream(absolutePath).pipe(res);
 });
 
-// 5. SCAN
 app.post('/api/scan', strictLimiter, requirePin, async (req, res) => {
   const owner = req.body.owner;
   if (owner === 'ALL' && !MASTER_URL) {
@@ -463,18 +529,14 @@ app.post('/api/scan', strictLimiter, requirePin, async (req, res) => {
     if (MASTER_URL) { await syncWithMaster(files); }
     res.json({ success: true, count: files.length, message: "Sync Complete." });
   } catch (e: any) {
-    console.error(e);
     res.json({ success: true, count: 0, message: "Local scan done, but sync failed." });
   }
 });
 
-// 6. SYNC
 app.post('/api/sync', strictLimiter, requireSecret, async (req, res) => {
   const { owner, files, url } = req.body as SyncPayload;
-  
   if (MASTER_URL) { res.status(400).json({ error: "Satellite cannot receive sync." }); return; }
   if (!ALLOWED_USERS.includes(owner)) { res.status(403).json({ error: 'User not allowed' }); return; }
-
   try {
     await replaceUserFiles(owner, files);
     if (url) await registerNode(owner, url); 
@@ -483,7 +545,6 @@ app.post('/api/sync', strictLimiter, requireSecret, async (req, res) => {
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
-// 7. FILES
 app.get('/api/files', requirePin, (req, res) => {
   const query = `
     SELECT m.*, n.url as remote_url 
@@ -504,9 +565,8 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist', 'index.html'));
 });
 
-// --- AUTOMATION ---
+// --- CRON ---
 const scheduledScan = async () => {
-  console.log(`[Cron] Scheduled scan...`);
   const files = await performLocalScan();
   try { await syncWithMaster(files); } catch(e) {} 
 };
@@ -516,4 +576,4 @@ if (cron.validate(CRON_SCHEDULE)) {
   cron.schedule(CRON_SCHEDULE, scheduledScan);
 }
 
-app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 Server (${MASTER_URL ? 'Satellite' : 'Master'}) running on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 Server running on ${PORT}`));
