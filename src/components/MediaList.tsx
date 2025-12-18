@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, AppConfig } from '../types';
 import { get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
-// 1. Keep Props consistent with your working parent component
 interface MediaListProps {
   items: MediaItem[];
   onSelect: (item: MediaItem) => void;
@@ -11,30 +10,18 @@ interface MediaListProps {
 
 const getIcon = (type: string, isAlbum = false) => {
   switch (type) {
-    case 'Movie': return (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>
-    );
-    case 'TV Show': return (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-    );
-    case 'Music': 
-      if (isAlbum) {
-        return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>;
-      }
-      return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>;
-    default: return (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-    );
+    case 'Movie': return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>;
+    case 'TV Show': return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
+    case 'Music': return isAlbum ? <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg> : <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>;
+    default: return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>;
   }
 };
 
 const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) => {
-  // --- STATE FOR FILTERING ---
   const [hostUser, setHostUser] = useState<string>(''); 
   const [filterOwner, setFilterOwner] = useState<string>('All'); 
   const [missingOnly, setMissingOnly] = useState<boolean>(false);
 
-  // Fetch Config to know who "I" am
   useEffect(() => {
     fetch('/api/config')
       .then(res => res.json())
@@ -44,22 +31,18 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
       .catch(console.error);
   }, []);
 
-  // Calculate Unique Owners
   const availableOwners = useMemo(() => {
     const owners = new Set<string>();
     items.forEach(m => m.files.forEach(f => owners.add(f.owner)));
     return Array.from(owners).sort();
   }, [items]);
 
-  // Apply Filters
   const displayedItems = useMemo(() => {
     return items.filter(item => {
-      // 1. Owner Filter
       if (filterOwner !== 'All') {
         const hasOwner = item.files.some(f => f.owner === filterOwner);
         if (!hasOwner) return false;
       }
-      // 2. Missing Filter
       if (missingOnly && hostUser) {
         const iHaveIt = item.files.some(f => f.owner === hostUser);
         if (iHaveIt) return false; 
@@ -80,11 +63,8 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
 
   return (
     <div className="flex flex-col h-full bg-gray-900">
-      
-      {/* --- FILTER BAR --- */}
+      {/* FILTER BAR */}
       <div className="p-3 bg-gray-900/95 backdrop-blur border-b border-gray-800 sticky top-0 z-10 flex flex-wrap gap-3 items-center justify-between shadow-md">
-        
-        {/* Owner Dropdown */}
         <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Source</span>
             <select 
@@ -99,7 +79,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             </select>
         </div>
 
-        {/* Missing Toggle */}
         {hostUser && (
             <button
                 onClick={() => setMissingOnly(!missingOnly)}
@@ -118,10 +97,8 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
         )}
       </div>
 
-      {/* --- LIST CONTENT --- */}
-      {/* FIX: Increased bottom padding (pb-32) so content is never cut off */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2 pb-48 custom-scrollbar">
-        
+      {/* LIST */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-2 pb-32 custom-scrollbar">
         {displayedItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-gray-500">
              <p>No media found.</p>
@@ -133,10 +110,11 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             const is4K = item.files.some(f => get4KFormat(f.rawFilename));
             const remuxTag = item.files.map(f => getRemuxFormat(f.rawFilename)).find(t => t !== null);
             
+            // UPDATED: Strict filter to remove empty strings (fixes blank tags)
             const qualities = Array.from(new Set(
               item.files
                 .map(f => item.type === 'Music' ? getAudioFormat(f.rawFilename) : f.quality)
-                .filter((q): q is string => typeof q === 'string' && !is4KQualityString(q))
+                .filter((q): q is string => typeof q === 'string' && q.trim().length > 0 && !is4KQualityString(q))
             )).slice(0, 3);
             
             const owners = Array.from(new Set(item.files.map(f => f.owner))).sort();
@@ -214,12 +192,18 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                   {is3D && (
                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-blue-300 bg-blue-500/50 text-white' : 'border-blue-500 text-blue-400 bg-blue-900/30'}`}>3D</span>
                   )}
-                  {qualities.map((q, i) => (
-                    <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-white/40 bg-white/10' : 'border-gray-600 bg-gray-700 text-gray-400'}`}>{q}</span>
-                  ))}
-                  {qualities.length === 0 && !is3D && !is4K && !remuxTag && (
-                     <span className={`text-[9px] px-1.5 py-0.5 rounded border ${selectedId === item.id ? 'border-white/20' : 'border-gray-700 text-gray-600'}`}>STD</span>
-                  )}
+                  {/* UPDATED: FLAC Logic in Map */}
+                  {qualities.map((q, i) => {
+                    const isFlac = q.toUpperCase() === 'FLAC';
+                    const defaultStyle = selectedId === item.id ? 'border-white/40 bg-white/10' : 'border-gray-600 bg-gray-700 text-gray-400';
+                    const flacStyle = selectedId === item.id ? 'border-yellow-300 bg-yellow-600 text-white' : 'border-yellow-500 text-yellow-400 bg-yellow-900/40';
+                    
+                    return (
+                      <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${isFlac ? flacStyle : defaultStyle}`}>
+                        {q}
+                      </span>
+                    );
+                  })}
                 </div>
               </button>
             );
