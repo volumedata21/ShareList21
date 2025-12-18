@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:server": "esbuild server.ts --bundle --platform=node --target=node20 --format=esm --packages=external --outdir=dist-server",
     "start": "node dist-server/server.js",
     "type-check": "tsc --noEmit"
   },
@@ -29,6 +30,7 @@
     "@types/sqlite3": "^3.1.11",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.17",
+    "esbuild": "^0.20.0", 
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",
     "tsx": "^4.7.0",
