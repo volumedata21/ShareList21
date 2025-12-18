@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { MediaFile } from './types';
+import { MediaFile } from './src/types';
 
 // Valid Extensions
 const VALID_EXTS = new Set([
