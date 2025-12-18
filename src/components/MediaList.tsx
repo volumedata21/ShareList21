@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, AppConfig } from '../types';
 import { get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
-// 1. Keep the Props exactly as they were in your working version
+// 1. Keep Props consistent with your working parent component
 interface MediaListProps {
   items: MediaItem[];
   onSelect: (item: MediaItem) => void;
@@ -29,7 +29,7 @@ const getIcon = (type: string, isAlbum = false) => {
 };
 
 const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) => {
-  // --- NEW STATE FOR FILTERING ---
+  // --- STATE FOR FILTERING ---
   const [hostUser, setHostUser] = useState<string>(''); 
   const [filterOwner, setFilterOwner] = useState<string>('All'); 
   const [missingOnly, setMissingOnly] = useState<boolean>(false);
@@ -44,14 +44,14 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
       .catch(console.error);
   }, []);
 
-  // Calculate Unique Owners from the items passed in
+  // Calculate Unique Owners
   const availableOwners = useMemo(() => {
     const owners = new Set<string>();
     items.forEach(m => m.files.forEach(f => owners.add(f.owner)));
     return Array.from(owners).sort();
   }, [items]);
 
-  // Apply Local Filters (Owner & Missing) on top of the props
+  // Apply Filters
   const displayedItems = useMemo(() => {
     return items.filter(item => {
       // 1. Owner Filter
@@ -81,7 +81,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
   return (
     <div className="flex flex-col h-full bg-gray-900">
       
-      {/* --- NEW FILTER BAR --- */}
+      {/* --- FILTER BAR --- */}
       <div className="p-3 bg-gray-900/95 backdrop-blur border-b border-gray-800 sticky top-0 z-10 flex flex-wrap gap-3 items-center justify-between shadow-md">
         
         {/* Owner Dropdown */}
@@ -119,7 +119,8 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
       </div>
 
       {/* --- LIST CONTENT --- */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2 pb-24 lg:pb-4 custom-scrollbar">
+      {/* FIX: Increased bottom padding (pb-32) so content is never cut off */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-2 pb-48 custom-scrollbar">
         
         {displayedItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-gray-500">
@@ -155,8 +156,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
               }
             }
 
-            // Determine border color based on filtering context
-            // If I'm filtering for "Missing", highlight these items
             const isMissingItem = hostUser && !owners.includes(hostUser);
             const borderClass = (missingOnly || isMissingItem) && !selectedId
                 ? 'border border-purple-900/50' 
