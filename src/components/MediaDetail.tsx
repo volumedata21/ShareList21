@@ -26,11 +26,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
   
   const [canDownload, setCanDownload] = useState(false);
   const [currentUser, setCurrentUser] = useState<string>('');
-  
-  // UPDATED: Use a Set to track multiple files downloading at once
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
-
-  // Accordion State
   const [expandedSeasons, setExpandedSeasons] = useState<Set<number>>(new Set());
 
   useEffect(() => {
@@ -48,7 +44,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     setTimeout(() => setCopiedState(null), 2000);
   };
 
-  // --- SINGLE DOWNLOAD ---
   const handleDownload = async (file: ProcessedFile) => {
     const pin = sessionStorage.getItem('pf_pin') || '';
     setDownloadingIds(prev => new Set(prev).add(file.path));
@@ -64,8 +59,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         })
       });
       if (!res.ok) throw new Error("Failed");
-      
-      // Clear loading state after a delay
       setTimeout(() => {
         setDownloadingIds(prev => {
           const next = new Set(prev);
@@ -74,7 +67,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         });
       }, 2000);
     } catch (e) {
-      console.error(e);
       setDownloadingIds(prev => {
          const next = new Set(prev);
          next.delete(file.path);
@@ -84,11 +76,8 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     }
   };
 
-  // --- NEW: BATCH DOWNLOAD SEASON ---
   const handleSeasonDownload = async (files: ProcessedFile[]) => {
     const pin = sessionStorage.getItem('pf_pin') || '';
-    
-    // Filter out files I already own
     const filesToDownload = files.filter(f => f.owner !== currentUser);
     
     if (filesToDownload.length === 0) {
@@ -96,21 +85,18 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         return;
     }
 
-    // Update UI immediately
     setDownloadingIds(prev => {
         const next = new Set(prev);
         filesToDownload.forEach(f => next.add(f.path));
         return next;
     });
 
-    // Group by owner (in case Ep1 is from Joe, Ep2 from Lamar)
     const filesByOwner: Record<string, ProcessedFile[]> = {};
     filesToDownload.forEach(f => {
         if (!filesByOwner[f.owner]) filesByOwner[f.owner] = [];
         filesByOwner[f.owner].push(f);
     });
 
-    // Send requests
     for (const owner of Object.keys(filesByOwner)) {
         const batch = filesByOwner[owner];
         try {
@@ -120,7 +106,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                 body: JSON.stringify({ 
                   files: batch.map(f => ({ path: f.path, rawFilename: f.rawFilename })),
                   owner: owner,
-                  folderName: item.name // Puts them in a folder named after the show
+                  folderName: item.name 
                 })
             });
         } catch (e) {
@@ -128,7 +114,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         }
     }
 
-    // Clear loading state after delay
     setTimeout(() => {
         setDownloadingIds(prev => {
           const next = new Set(prev);
@@ -292,11 +277,16 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
         <div className="p-4 flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            {/* Tags */}
             {file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded border border-purple-500 text-purple-300 bg-purple-900/40">{file.isRemux}</span>}
             {file.is4K && !file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange">4K UHD</span>}
             {file.is3D && <span className="text-xs font-bold px-2 py-0.5 rounded border border-blue-400 text-blue-300 bg-blue-900/20">{file.is3D}</span>}
-            {file.quality && !is4KQualityString(file.quality) && <span className="text-xs font-bold px-2 py-0.5 rounded border border-gray-600 text-gray-400">{file.quality}</span>}
+            
+            {/* UPDATED: Strict Empty Check */}
+            {file.quality && !is4KQualityString(file.quality) && file.quality.trim() !== '' && (
+                <span className="text-xs font-bold px-2 py-0.5 rounded border border-gray-600 text-gray-400">
+                    {file.quality}
+                </span>
+            )}
           </div>
 
           <div 
@@ -358,7 +348,15 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                          <div className="min-w-0 flex-1 pr-4">
                            <div className="text-sm font-medium text-gray-200 truncate">{file.rawFilename}</div>
                            <div className="flex items-center gap-2 mt-1">
-                             {file.audioFormat && (<span className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-gray-600 text-gray-400">{file.audioFormat}</span>)}
+                             {/* UPDATED: Gold FLAC in Music View */}
+                             {file.audioFormat && (
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border 
+                                  ${file.audioFormat.toUpperCase() === 'FLAC' 
+                                    ? 'border-yellow-500 text-yellow-400 bg-yellow-900/40 shadow-[0_0_8px_rgba(234,179,8,0.3)]' 
+                                    : 'border-gray-600 text-gray-400'}`}>
+                                  {file.audioFormat}
+                                </span>
+                             )}
                              <span className="text-[10px] uppercase font-bold text-green-500 bg-green-900/20 px-1.5 py-0.5 rounded">{file.owner}</span>
                            </div>
                          </div>
@@ -435,7 +433,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
              <div className="text-gray-500 italic text-sm p-4 text-center border border-gray-800 rounded bg-gray-900/30">No files found for this user.</div>
           ) : (
              <>
-               {/* TV SHOWS (With Season Download) */}
                {item.type === 'TV Show' ? (
                  <div className="space-y-4">
                    {Object.keys(groupedSeasons).map(k => Number(k)).sort((a,b) => a - b).map(seasonNum => {
@@ -443,32 +440,21 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                      const files = groupedSeasons[seasonNum];
                      const seasonTitle = seasonNum === 0 ? 'Specials' : `Season ${seasonNum}`;
                      
-                     // Check if there's anything to download in this season
                      const downloadableFiles = files.filter(f => f.owner !== currentUser);
                      const hasDownloads = canDownload && downloadableFiles.length > 0;
 
                      return (
                        <div key={seasonNum} className="border border-gray-800 rounded-lg overflow-hidden bg-gray-800/30">
-                         {/* Header */}
                          <div className="flex justify-between items-center p-4 bg-gray-800/50 hover:bg-gray-800 transition-colors">
-                           
-                           {/* Click to Expand */}
-                           <button 
-                             onClick={() => toggleSeason(seasonNum)}
-                             className="flex items-center gap-3 flex-1 text-left"
-                           >
+                           <button onClick={() => toggleSeason(seasonNum)} className="flex items-center gap-3 flex-1 text-left">
                              <span className={`transform transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}>
-                               <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                               </svg>
+                               <svg className="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                              </span>
                              <div>
                                 <h3 className="text-lg font-bold text-gray-200">{seasonTitle}</h3>
                                 <span className="text-xs text-gray-500 font-mono">{files.length} Episodes</span>
                              </div>
                            </button>
-
-                           {/* DOWNLOAD SEASON BUTTON (Prevent expansion click) */}
                            {hasDownloads && (
                                <button
                                  onClick={(e) => { e.stopPropagation(); handleSeasonDownload(downloadableFiles); }}
@@ -479,8 +465,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                                </button>
                            )}
                          </div>
-
-                         {/* Body */}
                          {isExpanded && (
                            <div className="p-4 border-t border-gray-800 space-y-4 bg-gray-900/20">
                              {files.map(file => renderFileCard(file))}
@@ -491,7 +475,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                    })}
                  </div>
                ) : (
-                 /* MOVIES (Flat List) */
                  <div className="space-y-4">
                    {displayedFiles.map(file => renderFileCard(file))}
                  </div>
@@ -499,7 +482,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
              </>
           )}
         </section>
-
       </div>
     </div>
   );
