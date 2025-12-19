@@ -20,6 +20,18 @@ interface ProcessedFile extends MediaFile {
   editionTag?: string | null;
 }
 
+// --- SHARED ICON LOGIC (Same as MediaList) ---
+const getIcon = (type: string, isAlbum = false) => {
+  switch (type) {
+    case 'Movie': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>;
+    case 'TV Show': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
+    case 'Music': return isAlbum 
+      ? <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg> // Library Icon
+      : <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>; // Music Note
+    default: return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>;
+  }
+};
+
 const getEditionTag = (filename: string): string | null => {
   const match = filename.match(/\{edition-([^}]+)\}/i);
   return match ? match[1] : null;
@@ -285,33 +297,24 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
         <div className="p-4 flex flex-col gap-3">
           <div className="flex items-center gap-2">
-            
-            {/* EDITION BADGE */}
             {file.editionTag && (
                 <span className="text-xs font-bold px-2 py-0.5 rounded border border-cyan-500 text-cyan-300 bg-cyan-900/40 shadow-[0_0_8px_rgba(34,211,238,0.3)]">
                   {file.editionTag}
                 </span>
             )}
-
-            {/* REMUX BADGE (Conditional Color) */}
+            
             {file.isRemux && (
                <span className={`text-xs font-bold px-2 py-0.5 rounded border 
                    ${file.is4K 
-                       ? 'border-purple-500 text-purple-300 bg-purple-900/40' // Purple for 4K
-                       : 'border-blue-500 text-blue-300 bg-blue-900/40'       // Blue for 1080p
+                       ? 'border-purple-500 text-purple-300 bg-purple-900/40' 
+                       : 'border-blue-500 text-blue-300 bg-blue-900/40' 
                    }`}>
                    {file.isRemux}
                </span>
             )}
 
-            {/* 4K BADGE (Only if NOT Remux, to avoid double badges if you prefer, or keep both. Currently keeps both if you want.) 
-                Actually, standard practice is to hide '4K UHD' if '4K Remux' is shown, but your logic requested: 
-                "1080remux tags... should still be blue". 
-                Below shows 4K badge if it is 4K but NOT remux. If it IS remux, the Remux badge handles the purple.
-            */}
             {file.is4K && !file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange">4K UHD</span>}
-
-            {/* 3D BADGE (Mint) */}
+            
             {file.is3D && <span className="text-xs font-bold px-2 py-0.5 rounded border border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]">{file.is3D}</span>}
             
             {file.quality && !is4KQualityString(file.quality) && file.quality.trim() !== '' && (
@@ -356,8 +359,13 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
       <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
         <div className="p-6 border-b border-gray-700 flex justify-between items-start sticky top-0 bg-gray-800 z-10 shadow-md">
           <div className="flex-1 mr-4">
-            <h2 className="text-2xl font-bold text-white break-words leading-tight">{item.name}</h2>
-            <div className="flex gap-2 mt-3 items-center">
+            <div className="flex items-center gap-3 mb-1">
+               <div className={`p-2 rounded-full ${isAlbumView ? 'bg-indigo-900/50 text-indigo-300' : 'bg-pink-900/50 text-pink-300'}`}>
+                  {getIcon(item.type, isAlbumView)}
+               </div>
+               <h2 className="text-2xl font-bold text-white break-words leading-tight">{item.name}</h2>
+            </div>
+            <div className="flex gap-2 mt-2 items-center ml-12">
               <span className="px-2 py-0.5 bg-plex-orange text-black text-xs font-bold rounded uppercase tracking-wider">{isAlbumView ? 'Music Album' : 'Music Artist'}</span>
               {!isAlbumView && (<span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs font-bold rounded">{albumCount} Albums</span>)}
             </div>
@@ -374,16 +382,15 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
            {Object.keys(albums).sort().map(albumName => {
              const albumFiles = albums[albumName];
-             // Calculate downloadable files for this album
              const downloadableFiles = albumFiles.filter(f => f.owner !== currentUser);
              const hasDownloads = canDownload && downloadableFiles.length > 0;
 
              return (
                <div key={albumName} className="space-y-3">
-                 {/* Updated Header with Download Button */}
                  <div className="flex items-center justify-between border-b border-gray-700 pb-2">
                     <h3 className="text-lg font-bold text-gray-300 flex items-center gap-2">
-                        <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+                        {/* UPDATE: Use Library Icon for Album Headers */}
+                        <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
                         {albumName}
                     </h3>
                     {hasDownloads && (
@@ -447,13 +454,19 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     );
   }
 
+  // --- STANDARD / TV SHOW RENDER ---
   return (
     <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
       {/* Header */}
       <div className="p-6 border-b border-gray-700 flex justify-between items-start sticky top-0 bg-gray-800 z-10 shadow-md">
         <div className="flex-1 mr-4">
-          <h2 className="text-2xl font-bold text-white break-words leading-tight">{item.name}</h2>
-          <div className="flex gap-2 mt-3 items-center">
+          <div className="flex items-center gap-3 mb-1">
+             <div className="p-2 bg-gray-700/50 rounded-full text-gray-300">
+                {getIcon(item.type, false)}
+             </div>
+             <h2 className="text-2xl font-bold text-white break-words leading-tight">{item.name}</h2>
+          </div>
+          <div className="flex gap-2 mt-2 items-center ml-12">
             <span className="px-2 py-0.5 bg-plex-orange text-black text-xs font-bold rounded uppercase tracking-wider">{item.type}</span>
             <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs font-bold rounded">{item.files.length} {item.files.length === 1 ? 'File' : 'Files'}</span>
           </div>
@@ -464,7 +477,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
       </div>
 
       <div className="p-6 space-y-8">
-        
         {/* OWNERS FILTER */}
         <section>
            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">Filter by Owner</h3>
@@ -495,7 +507,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                      const isExpanded = expandedSeasons.has(seasonNum);
                      const files = groupedSeasons[seasonNum];
                      const seasonTitle = seasonNum === 0 ? 'Specials' : `Season ${seasonNum}`;
-                     
                      const downloadableFiles = files.filter(f => f.owner !== currentUser);
                      const hasDownloads = canDownload && downloadableFiles.length > 0;
 
