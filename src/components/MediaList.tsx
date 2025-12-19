@@ -110,8 +110,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             const versionCount = item.files.length;
             const is4K = item.files.some(f => get4KFormat(f.rawFilename));
             
-            // --- NEW: MULTI-REMUX BADGE LOGIC ---
-            // 1. Gather all remux tags with their resolution status
+            // --- MULTI-REMUX BADGE LOGIC ---
             const allRemuxes = item.files
                 .filter(f => getRemuxFormat(f.rawFilename) !== null)
                 .map(f => ({
@@ -119,7 +118,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                     is4K: get4KFormat(f.rawFilename)
                 }));
 
-            // 2. Deduplicate (We don't want two identical "Remux (Blue)" badges)
             const uniqueRemuxes: { label: string, is4K: boolean }[] = [];
             const seenRemux = new Set<string>();
             allRemuxes.forEach(r => {
@@ -130,7 +128,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 }
             });
 
-            // 3. Check if we specifically have a 4K Remux (to hide the generic 4K badge later)
             const has4KRemux = uniqueRemuxes.some(r => r.is4K);
 
             // --- CLEANING LOGIC ---
@@ -153,10 +150,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 .filter((q): q is string => {
                     if (typeof q !== 'string' || q.trim().length === 0) return false;
                     if (is4KQualityString(q)) return false;
-                    
-                    // Hide 1080p if ANY remux exists (to keep it clean)
                     if (uniqueRemuxes.length > 0 && (q === '1080p' || q === '1080i')) return false;
-                    
                     return true;
                 })
             )).slice(0, 3);
@@ -180,25 +174,25 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
 
             const isMissingItem = hostUser && !owners.includes(hostUser);
             
-            let bgClass = "";
-            let textClass = "";
+            // --- STYLE FIX: Outline instead of Background color for Selected ---
+            let cardStyle = "";
+            
             if (selectedId === item.id) {
-                bgClass = "bg-plex-orange text-white shadow-lg scale-[1.01]";
-                textClass = "text-white"; 
+                // SELECTED: Dark Background (readable text), Orange Border, Scale Effect
+                cardStyle = "bg-gray-800 border-plex-orange text-white shadow-lg scale-[1.01] z-10";
             } else if (isMissingItem) {
-                bgClass = "bg-gray-800/40 hover:bg-gray-800/60";
-                textClass = "text-gray-400"; 
+                // MISSING: Dimmed Background, Transparent Border, Dimmed Text
+                cardStyle = "bg-gray-800/40 border-transparent text-gray-400 hover:bg-gray-800/60";
             } else {
-                bgClass = "bg-gray-800 hover:bg-gray-700";
-                textClass = "text-gray-200";
+                // STANDARD: Dark Background, Transparent Border, Standard Text
+                cardStyle = "bg-gray-800 border-transparent text-gray-200 hover:bg-gray-700";
             }
-            const borderClass = 'border border-transparent';
 
             return (
               <button
                 key={item.id}
                 onClick={() => onSelect(item)}
-                className={`w-full flex items-center p-3 rounded-lg text-left transition-all duration-200 group ${borderClass} ${bgClass} ${textClass}`}
+                className={`w-full flex items-center p-3 rounded-lg text-left transition-all duration-200 group border ${cardStyle}`}
               >
                 <div className={`p-2 rounded-full mr-4 ${selectedId === item.id ? 'bg-white/20' : 'bg-gray-700 group-hover:bg-gray-600'}`}>
                   {getIcon(item.type, isAlbumView)}
@@ -247,7 +241,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
 
                 <div className="flex flex-row items-center ml-2 gap-1">
                   
-                  {/* MULTI-REMUX TAGS (Iterate over unique badges) */}
+                  {/* MULTI-REMUX TAGS */}
                   {uniqueRemuxes.map((badge, idx) => (
                     <span key={idx} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm 
                         ${badge.is4K 
@@ -258,7 +252,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                     </span>
                   ))}
 
-                  {/* Generic 4K Badge (Hidden ONLY if we have a 4K Remux badge already) */}
                   {is4K && !has4KRemux && (
                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-black/20 bg-black/20 text-white' : 'border-plex-orange bg-plex-orange text-black'}`}>4K UHD</span>
                   )}
