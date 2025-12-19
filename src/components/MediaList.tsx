@@ -62,9 +62,13 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-900">
-      {/* FILTER BAR */}
-      <div className="p-3 bg-gray-900/95 backdrop-blur border-b border-gray-800 sticky top-0 z-10 flex flex-wrap gap-3 items-center justify-between shadow-md">
+    // FIX 1: 'overflow-hidden' on the parent prevents the whole page from growing
+    <div className="flex flex-col h-full bg-gray-900 overflow-hidden">
+      
+      {/* FIX 2: Removed 'sticky'. 
+          Added 'flex-none' so this header stays rigid and never shrinks. 
+          It naturally sits at the top. */}
+      <div className="flex-none p-3 bg-gray-900/95 backdrop-blur border-b border-gray-800 z-10 flex flex-wrap gap-3 items-center justify-between shadow-md">
         <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Source</span>
             <select 
@@ -97,8 +101,13 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
         )}
       </div>
 
-      {/* LIST */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2 pb-32 custom-scrollbar">
+      {/* FIX 3: 
+          - flex-1: "Take all REMAINING height" (Screen - Header)
+          - min-h-0: "Allow me to shrink if needed" (The Magic Fix)
+          - overflow-y-auto: "Scroll ONLY inside this box"
+          - Removed pb-32: We don't need the huge padding anymore because the scrollbar ends correctly now. 
+      */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2 custom-scrollbar">
         {displayedItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-gray-500">
              <p>No media found.</p>
@@ -110,7 +119,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             const is4K = item.files.some(f => get4KFormat(f.rawFilename));
             const remuxTag = item.files.map(f => getRemuxFormat(f.rawFilename)).find(t => t !== null);
             
-            // UPDATED: Strict filter to remove empty strings (fixes blank tags)
             const qualities = Array.from(new Set(
               item.files
                 .map(f => item.type === 'Music' ? getAudioFormat(f.rawFilename) : f.quality)
@@ -192,12 +200,10 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                   {is3D && (
                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-blue-300 bg-blue-500/50 text-white' : 'border-blue-500 text-blue-400 bg-blue-900/30'}`}>3D</span>
                   )}
-                  {/* UPDATED: FLAC Logic in Map */}
                   {qualities.map((q, i) => {
                     const isFlac = q.toUpperCase() === 'FLAC';
                     const defaultStyle = selectedId === item.id ? 'border-white/40 bg-white/10' : 'border-gray-600 bg-gray-700 text-gray-400';
                     const flacStyle = selectedId === item.id ? 'border-yellow-300 bg-yellow-600 text-white' : 'border-yellow-500 text-yellow-400 bg-yellow-900/40';
-                    
                     return (
                       <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${isFlac ? flacStyle : defaultStyle}`}>
                         {q}
