@@ -23,24 +23,35 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 80;
 
+// --- CONFIGURATION ---
+const MAX_CONCURRENT_DOWNLOADS = 1; 
+
 app.set('trust proxy', 1);
 
 // --- LIMITERS ---
+
+// 1. General API calls (Config, File Lists, Sync, Download Queue)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
   max: 1000, 
-  standardHeaders: true, 
-  legacyHeaders: false,
+  message: { error: "Too many requests." }
 });
 
-const strictLimiter = rateLimit({
+// 2. SCANNING (Strict)
+const scanLimiter = rateLimit({
   windowMs: 60 * 1000, 
-  max: 500, 
-  standardHeaders: true, 
-  legacyHeaders: false,
+  max: 6, 
+  message: { error: "Scanning too frequently. Please wait 10 seconds." }
 });
 
-// --- CONFIG ---
+// 3. MEDIA SERVING (Generous)
+const mediaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, 
+  max: 10000, 
+  message: { error: "Download quota exceeded. Please wait." }
+});
+
+// --- DB & ENV ---
 const DB_PATH = '/data/sharelist.db';
 const APP_PIN = process.env.APP_PIN; 
 const SYNC_SECRET = process.env.SYNC_SECRET;
@@ -67,7 +78,7 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 interface DownloadStatus {
   id: string;
   filename: string;
-  remoteUrl: string; // Store this for Retry logic
+  remoteUrl: string;
   remotePath: string;
   localPath: string;
   totalBytes: number;
@@ -167,6 +178,7 @@ db.serialize(() => {
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, '../dist')));
+// Use General Limiter globally for safety
 app.use(generalLimiter);
 
 // --- AUTH ---
@@ -227,11 +239,10 @@ const ensureDir = (dirPath: string) => {
   }
 };
 
-// --- SINGLE DOWNLOAD FUNCTION (Reverted to standard Agents) ---
+// --- DOWNLOAD WORKER ---
 const downloadFile = async (remoteUrl: string, remotePath: string, localPath: string, jobId: string) => {
   if (!DOWNLOAD_ROOT) throw new Error("No Download Root configured.");
   
-  // SKIP CHECK
   if (fs.existsSync(localPath)) {
     console.log(`[Download SKIP] File already exists: ${localPath}`);
     const job = activeDownloads.get(jobId);
@@ -245,7 +256,7 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
          speed: 0 
        });
     }
-    return; 
+    return;
   }
 
   const cleanBaseUrl = remoteUrl.replace(/\/$/, '');
@@ -265,8 +276,6 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
   return new Promise<void>((resolve, reject) => {
     const lib = downloadUrl.startsWith('https') ? https : http;
-    
-    // REVERTED: Using standard Node networking (no custom agents)
     const req = lib.get(downloadUrl, {
       headers: { 'x-sync-secret': SYNC_SECRET || '' },
       signal: signal 
@@ -361,8 +370,8 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
 // --- ROUTES ---
 
-// 1. DOWNLOAD (RESTORED SIMPLE LOOP LOGIC)
-app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
+// Download uses General Limiter
+app.post('/api/download', generalLimiter, requirePin, async (req, res) => {
   const { path: singlePath, filename: singleFilename, files, owner, folderName } = req.body;
   let newJobs: { remotePath: string, filename: string }[] = [];
 
@@ -386,7 +395,6 @@ app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
       return;
     }
 
-    // 1. Initialize UI Cards for all items immediately
     const queueIds: string[] = [];
     newJobs.forEach(item => {
         const jobId = generateId();
@@ -405,16 +413,11 @@ app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
         });
     });
 
-    // 2. Respond to Frontend immediately
     res.json({ success: true, message: `Queued ${newJobs.length} items...` });
 
-    // 3. Process Downloads SEQUENTIALLY (The "Old" Reliable Way)
-    // This loop effectively acts as a queue of 1
     for (let i = 0; i < newJobs.length; i++) {
         const jobId = queueIds[i];
         const job = activeDownloads.get(jobId);
-        
-        // Skip if user cancelled while waiting in line
         if (!job || job.status === 'cancelled') continue;
 
         try {
@@ -426,16 +429,14 @@ app.post('/api/download', strictLimiter, requirePin, async (req, res) => {
   });
 });
 
-// 2. CANCEL
 app.post('/api/download/cancel', requirePin, (req, res) => {
   const { id } = req.body;
   const job = activeDownloads.get(id);
   
   if (job) {
     if (job.abortController) {
-      job.abortController.abort(); // Kills active stream
+      job.abortController.abort(); 
     }
-    // Mark as cancelled (stops loop from picking it up if pending)
     activeDownloads.set(id, { ...job, status: 'cancelled', speed: 0 });
     res.json({ success: true, message: "Cancelled" });
   } else {
@@ -443,7 +444,6 @@ app.post('/api/download/cancel', requirePin, (req, res) => {
   }
 });
 
-// 3. RETRY (Simple re-trigger)
 app.post('/api/download/retry', requirePin, async (req, res) => {
   const { id } = req.body;
   const job = activeDownloads.get(id);
@@ -451,11 +451,9 @@ app.post('/api/download/retry', requirePin, async (req, res) => {
   if (!job) { return res.status(404).json({ error: "Job not found" }); }
   if (job.status === 'downloading') { return res.status(400).json({ error: "Already downloading" }); }
 
-  // Reset UI
   activeDownloads.set(id, { ...job, status: 'pending', error: undefined, speed: 0 });
-  res.json({ success: true, message: "Retrying..." });
+  res.json({ success: true, message: "Re-queued..." });
 
-  // Fire off single download
   try {
      await downloadFile(job.remoteUrl, job.remotePath, job.localPath, id);
   } catch(e) {
@@ -463,7 +461,6 @@ app.post('/api/download/retry', requirePin, async (req, res) => {
   }
 });
 
-// 4. CLEAR COMPLETED
 app.post('/api/downloads/clear', requirePin, (req, res) => {
   for (const [id, job] of activeDownloads.entries()) {
     if (job.status === 'completed' || job.status === 'cancelled' || job.status === 'error' || job.status === 'skipped') {
@@ -489,7 +486,8 @@ app.get('/api/config', (req, res) => {
   });
 });
 
-app.get('/api/serve', strictLimiter, requireSecret, (req, res) => {
+// Use MEDIA LIMITER for serving files
+app.get('/api/serve', mediaLimiter, requireSecret, (req, res) => {
   const requestPath = req.query.path as string;
   if (!requestPath) { res.status(400).send('Missing path'); return; }
   
@@ -508,7 +506,8 @@ app.get('/api/serve', strictLimiter, requireSecret, (req, res) => {
   fs.createReadStream(absolutePath).pipe(res);
 });
 
-app.post('/api/scan', strictLimiter, requirePin, async (req, res) => {
+// Use SCAN LIMITER for scanning
+app.post('/api/scan', scanLimiter, requirePin, async (req, res) => {
   const owner = req.body.owner;
   if (owner === 'ALL' && !MASTER_URL) {
     try {
@@ -526,7 +525,8 @@ app.post('/api/scan', strictLimiter, requirePin, async (req, res) => {
   }
 });
 
-app.post('/api/sync', strictLimiter, requireSecret, async (req, res) => {
+// FIX: Replaced strictLimiter with generalLimiter
+app.post('/api/sync', generalLimiter, requireSecret, async (req, res) => {
   const { owner, files, url } = req.body as SyncPayload;
   if (MASTER_URL) { res.status(400).json({ error: "Satellite cannot receive sync." }); return; }
   if (!ALLOWED_USERS.includes(owner)) { res.status(403).json({ error: 'User not allowed' }); return; }
@@ -569,6 +569,6 @@ if (cron.validate(CRON_SCHEDULE)) {
   cron.schedule(CRON_SCHEDULE, scheduledScan);
 }
 
-// --- SERVER START (KEPT TIMEOUT FIX) ---
+// --- SERVER START ---
 const server = app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 Server running on ${PORT}`));
-server.setTimeout(0); // This is ESSENTIAL for large files, even with simple loops
+server.setTimeout(0);
