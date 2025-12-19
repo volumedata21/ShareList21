@@ -62,12 +62,9 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
   };
 
   return (
-    // FIX 1: 'overflow-hidden' on the parent prevents the whole page from growing
     <div className="flex flex-col h-full bg-gray-900 overflow-hidden">
       
-      {/* FIX 2: Removed 'sticky'. 
-          Added 'flex-none' so this header stays rigid and never shrinks. 
-          It naturally sits at the top. */}
+      {/* FILTER HEADER */}
       <div className="flex-none p-3 bg-gray-900/95 backdrop-blur border-b border-gray-800 z-10 flex flex-wrap gap-3 items-center justify-between shadow-md">
         <div className="flex items-center gap-2">
             <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Source</span>
@@ -101,12 +98,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
         )}
       </div>
 
-      {/* FIX 3: 
-          - flex-1: "Take all REMAINING height" (Screen - Header)
-          - min-h-0: "Allow me to shrink if needed" (The Magic Fix)
-          - overflow-y-auto: "Scroll ONLY inside this box"
-          - Removed pb-32: We don't need the huge padding anymore because the scrollbar ends correctly now. 
-      */}
+      {/* LIST CONTENT */}
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2 custom-scrollbar">
         {displayedItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-gray-500">
@@ -119,6 +111,27 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             const is4K = item.files.some(f => get4KFormat(f.rawFilename));
             const remuxTag = item.files.map(f => getRemuxFormat(f.rawFilename)).find(t => t !== null);
             
+            // --- CLEANING LOGIC START ---
+            
+            // 1. Extract Edition
+            const editionMatch = item.name.match(/\{edition-([^}]+)\}/i);
+            const editionName = editionMatch ? editionMatch[1] : null;
+
+            // 2. Base Cleanup (Remove Extension & Edition Tag)
+            let cleanTitle = item.name
+                .replace(/\.[^/.]+$/, "") // Remove .mkv or .mp4
+                .replace(/\{edition-[^}]+\}/i, '') // Remove {edition...}
+                .trim();
+
+            // 3. STOP AT YEAR LOGIC
+            // Look for (YYYY). If found, take everything up to the end of that year.
+            // This discards .1080p.hevc...
+            const yearMatch = cleanTitle.match(/^(.*?\(\d{4}\))/);
+            if (yearMatch) {
+                cleanTitle = yearMatch[1];
+            }
+            // -----------------------------
+
             const qualities = Array.from(new Set(
               item.files
                 .map(f => item.type === 'Music' ? getAudioFormat(f.rawFilename) : f.quality)
@@ -162,10 +175,23 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 </div>
                 
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold truncate flex items-center gap-2">
-                    <span className="flex items-center gap-1">{renderName(item.name, selectedId === item.id)}</span>
+                  <h3 className="text-sm font-semibold flex items-center gap-2 overflow-hidden">
+                    <span className="flex items-center gap-1 truncate">
+                        {renderName(cleanTitle, selectedId === item.id)}
+                    </span>
+                    
+                    {/* EDITION BADGE (Placed at End) */}
+                    {editionName && (
+                       <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap flex-none
+                         ${selectedId === item.id 
+                           ? 'border-cyan-300 bg-cyan-600 text-white' 
+                           : 'border-cyan-500 text-cyan-300 bg-cyan-900/40 shadow-[0_0_8px_rgba(34,211,238,0.3)]'}`}>
+                         {editionName}
+                       </span>
+                    )}
+
                     {isAlbumView && (
-                      <span className={`text-xs font-normal ${selectedId === item.id ? 'text-white/70' : 'text-gray-500'}`}>
+                      <span className={`text-xs font-normal truncate ${selectedId === item.id ? 'text-white/70' : 'text-gray-500'}`}>
                         by {artistName}
                       </span>
                     )}
