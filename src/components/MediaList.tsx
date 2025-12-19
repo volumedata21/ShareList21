@@ -109,34 +109,54 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
           displayedItems.map((item) => {
             const versionCount = item.files.length;
             const is4K = item.files.some(f => get4KFormat(f.rawFilename));
-            const remuxTag = item.files.map(f => getRemuxFormat(f.rawFilename)).find(t => t !== null);
             
-            // --- CLEANING & METADATA LOGIC ---
-            
-            // 1. Extract Edition
+            // --- NEW: MULTI-REMUX BADGE LOGIC ---
+            // 1. Gather all remux tags with their resolution status
+            const allRemuxes = item.files
+                .filter(f => getRemuxFormat(f.rawFilename) !== null)
+                .map(f => ({
+                    label: getRemuxFormat(f.rawFilename)!,
+                    is4K: get4KFormat(f.rawFilename)
+                }));
+
+            // 2. Deduplicate (We don't want two identical "Remux (Blue)" badges)
+            const uniqueRemuxes: { label: string, is4K: boolean }[] = [];
+            const seenRemux = new Set<string>();
+            allRemuxes.forEach(r => {
+                const key = `${r.label}-${r.is4K}`;
+                if (!seenRemux.has(key)) {
+                    seenRemux.add(key);
+                    uniqueRemuxes.push(r);
+                }
+            });
+
+            // 3. Check if we specifically have a 4K Remux (to hide the generic 4K badge later)
+            const has4KRemux = uniqueRemuxes.some(r => r.is4K);
+
+            // --- CLEANING LOGIC ---
             const editionMatch = item.name.match(/\{edition-([^}]+)\}/i);
             const editionName = editionMatch ? editionMatch[1] : null;
 
-            // 2. Base Cleanup (Remove Extension & Edition Tag)
             let cleanTitle = item.name
-                .replace(/\.[^/.]+$/, "") // Remove .mkv or .mp4
-                .replace(/\{edition-[^}]+\}/i, '') // Remove {edition...}
+                .replace(/\.[^/.]+$/, "") 
+                .replace(/\{edition-[^}]+\}/i, '') 
                 .trim();
 
-            // 3. STOP AT YEAR LOGIC
             const yearMatch = cleanTitle.match(/^(.*?\(\d{4}\))/);
             if (yearMatch) {
                 cleanTitle = yearMatch[1];
             }
 
-            // 4. QUALITIES FILTER
             const qualities = Array.from(new Set(
               item.files
                 .map(f => item.type === 'Music' ? getAudioFormat(f.rawFilename) : f.quality)
                 .filter((q): q is string => {
                     if (typeof q !== 'string' || q.trim().length === 0) return false;
                     if (is4KQualityString(q)) return false;
-                    if (remuxTag && (q === '1080p' || q === '1080i')) return false;
+                    
+                    // Hide 1080p if ANY remux exists (to keep it clean)
+                    if (uniqueRemuxes.length > 0 && (q === '1080p' || q === '1080i')) return false;
+                    
                     return true;
                 })
             )).slice(0, 3);
@@ -158,28 +178,20 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
               }
             }
 
-            // --- STYLING LOGIC: OWNED vs MISSING ---
             const isMissingItem = hostUser && !owners.includes(hostUser);
             
-            // Determine Background & Text Classes
             let bgClass = "";
             let textClass = "";
-            
             if (selectedId === item.id) {
-                // SELECTED (Always wins)
                 bgClass = "bg-plex-orange text-white shadow-lg scale-[1.01]";
                 textClass = "text-white"; 
             } else if (isMissingItem) {
-                // MISSING (Darker Background, Dimmed Text)
                 bgClass = "bg-gray-800/40 hover:bg-gray-800/60";
-                textClass = "text-gray-400"; // Dimmed from normal white/gray
+                textClass = "text-gray-400"; 
             } else {
-                // OWNED (Standard)
                 bgClass = "bg-gray-800 hover:bg-gray-700";
                 textClass = "text-gray-200";
             }
-
-            // Borders are gone, we use background/opacity to distinguish
             const borderClass = 'border border-transparent';
 
             return (
@@ -235,17 +247,19 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
 
                 <div className="flex flex-row items-center ml-2 gap-1">
                   
-                  {remuxTag && (
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm 
-                        ${is4K 
+                  {/* MULTI-REMUX TAGS (Iterate over unique badges) */}
+                  {uniqueRemuxes.map((badge, idx) => (
+                    <span key={idx} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm 
+                        ${badge.is4K 
                             ? (selectedId === item.id ? 'border-purple-300 bg-purple-600 text-white' : 'border-purple-500 text-purple-300 bg-purple-900/40')
                             : (selectedId === item.id ? 'border-blue-300 bg-blue-600 text-white' : 'border-blue-500 text-blue-300 bg-blue-900/40')
                         }`}>
-                        {remuxTag}
+                        {badge.label}
                     </span>
-                  )}
+                  ))}
 
-                  {is4K && !remuxTag && (
+                  {/* Generic 4K Badge (Hidden ONLY if we have a 4K Remux badge already) */}
+                  {is4K && !has4KRemux && (
                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-black/20 bg-black/20 text-white' : 'border-plex-orange bg-plex-orange text-black'}`}>4K UHD</span>
                   )}
                   
