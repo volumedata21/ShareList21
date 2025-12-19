@@ -20,7 +20,6 @@ interface ProcessedFile extends MediaFile {
   editionTag?: string | null;
 }
 
-// HELPER: Extract {edition-Title}
 const getEditionTag = (filename: string): string | null => {
   const match = filename.match(/\{edition-([^}]+)\}/i);
   return match ? match[1] : null;
@@ -83,7 +82,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     }
   };
 
-  // RENAMED: was handleSeasonDownload
   const handleBatchDownload = async (files: ProcessedFile[]) => {
     const pin = sessionStorage.getItem('pf_pin') || '';
     const filesToDownload = files.filter(f => f.owner !== currentUser);
@@ -287,14 +285,35 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
         <div className="p-4 flex flex-col gap-3">
           <div className="flex items-center gap-2">
+            
+            {/* EDITION BADGE */}
             {file.editionTag && (
                 <span className="text-xs font-bold px-2 py-0.5 rounded border border-cyan-500 text-cyan-300 bg-cyan-900/40 shadow-[0_0_8px_rgba(34,211,238,0.3)]">
                   {file.editionTag}
                 </span>
             )}
-            {file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded border border-purple-500 text-purple-300 bg-purple-900/40">{file.isRemux}</span>}
+
+            {/* REMUX BADGE (Conditional Color) */}
+            {file.isRemux && (
+               <span className={`text-xs font-bold px-2 py-0.5 rounded border 
+                   ${file.is4K 
+                       ? 'border-purple-500 text-purple-300 bg-purple-900/40' // Purple for 4K
+                       : 'border-blue-500 text-blue-300 bg-blue-900/40'       // Blue for 1080p
+                   }`}>
+                   {file.isRemux}
+               </span>
+            )}
+
+            {/* 4K BADGE (Only if NOT Remux, to avoid double badges if you prefer, or keep both. Currently keeps both if you want.) 
+                Actually, standard practice is to hide '4K UHD' if '4K Remux' is shown, but your logic requested: 
+                "1080remux tags... should still be blue". 
+                Below shows 4K badge if it is 4K but NOT remux. If it IS remux, the Remux badge handles the purple.
+            */}
             {file.is4K && !file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange">4K UHD</span>}
-            {file.is3D && <span className="text-xs font-bold px-2 py-0.5 rounded border border-blue-400 text-blue-300 bg-blue-900/20">{file.is3D}</span>}
+
+            {/* 3D BADGE (Mint) */}
+            {file.is3D && <span className="text-xs font-bold px-2 py-0.5 rounded border border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]">{file.is3D}</span>}
+            
             {file.quality && !is4KQualityString(file.quality) && file.quality.trim() !== '' && (
                 <span className={`text-xs font-bold px-2 py-0.5 rounded border 
                     ${file.quality.toUpperCase() === 'FLAC' 
@@ -428,7 +447,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     );
   }
 
-  // --- STANDARD / TV SHOW RENDER ---
   return (
     <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
       {/* Header */}
