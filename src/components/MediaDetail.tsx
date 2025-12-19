@@ -17,7 +17,14 @@ interface ProcessedFile extends MediaFile {
   isRemux?: string | null;
   albumName?: string;
   audioFormat?: string | null;
+  editionTag?: string | null; // NEW FIELD
 }
+
+// HELPER: Extract {edition-Title}
+const getEditionTag = (filename: string): string | null => {
+  const match = filename.match(/\{edition-([^}]+)\}/i);
+  return match ? match[1] : null;
+};
 
 const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
   const [loadedFiles, setLoadedFiles] = useState<ProcessedFile[]>([]);
@@ -133,6 +140,9 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         const format4K = get4KFormat(file.rawFilename);
         const formatRemux = getRemuxFormat(file.rawFilename);
         const audioFormat = getAudioFormat(file.rawFilename);
+        
+        // NEW: Extract Edition
+        const editionTag = getEditionTag(file.rawFilename);
 
         let epInfo = {};
         if (item.type === 'TV Show') {
@@ -161,6 +171,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
           is4K: format4K,
           isRemux: formatRemux,
           audioFormat,
+          editionTag, // Add to object
           ...epInfo,
           ...musicInfo
         } as ProcessedFile;
@@ -277,13 +288,24 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
         <div className="p-4 flex flex-col gap-3">
           <div className="flex items-center gap-2">
+            
+            {/* NEW: EDITION TAG */}
+            {file.editionTag && (
+                <span className="text-xs font-bold px-2 py-0.5 rounded border border-cyan-500 text-cyan-300 bg-cyan-900/40 shadow-[0_0_8px_rgba(34,211,238,0.3)]">
+                  {file.editionTag}
+                </span>
+            )}
+
             {file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded border border-purple-500 text-purple-300 bg-purple-900/40">{file.isRemux}</span>}
             {file.is4K && !file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange">4K UHD</span>}
             {file.is3D && <span className="text-xs font-bold px-2 py-0.5 rounded border border-blue-400 text-blue-300 bg-blue-900/20">{file.is3D}</span>}
             
-            {/* UPDATED: Strict Empty Check */}
+            {/* Gold FLAC logic in Details view */}
             {file.quality && !is4KQualityString(file.quality) && file.quality.trim() !== '' && (
-                <span className="text-xs font-bold px-2 py-0.5 rounded border border-gray-600 text-gray-400">
+                <span className={`text-xs font-bold px-2 py-0.5 rounded border 
+                    ${file.quality.toUpperCase() === 'FLAC' 
+                        ? 'border-yellow-500 text-yellow-400 bg-yellow-900/40 shadow-[0_0_8px_rgba(234,179,8,0.3)]' 
+                        : 'border-gray-600 text-gray-400'}`}>
                     {file.quality}
                 </span>
             )}
@@ -348,7 +370,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                          <div className="min-w-0 flex-1 pr-4">
                            <div className="text-sm font-medium text-gray-200 truncate">{file.rawFilename}</div>
                            <div className="flex items-center gap-2 mt-1">
-                             {/* UPDATED: Gold FLAC in Music View */}
                              {file.audioFormat && (
                                 <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border 
                                   ${file.audioFormat.toUpperCase() === 'FLAC' 
@@ -390,10 +411,8 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
     );
   }
 
-  // --- STANDARD / TV SHOW RENDER ---
   return (
     <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
-      {/* Header */}
       <div className="p-6 border-b border-gray-700 flex justify-between items-start sticky top-0 bg-gray-800 z-10 shadow-md">
         <div className="flex-1 mr-4">
           <h2 className="text-2xl font-bold text-white break-words leading-tight">{item.name}</h2>
@@ -408,8 +427,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
       </div>
 
       <div className="p-6 space-y-8">
-        
-        {/* OWNERS FILTER */}
         <section>
            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">Filter by Owner</h3>
            <div className="flex flex-wrap gap-2">
