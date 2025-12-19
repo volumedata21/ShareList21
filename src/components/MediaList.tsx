@@ -111,7 +111,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             const is4K = item.files.some(f => get4KFormat(f.rawFilename));
             const remuxTag = item.files.map(f => getRemuxFormat(f.rawFilename)).find(t => t !== null);
             
-            // --- CLEANING LOGIC START ---
+            // --- CLEANING & METADATA LOGIC ---
             
             // 1. Extract Edition
             const editionMatch = item.name.match(/\{edition-([^}]+)\}/i);
@@ -124,18 +124,21 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 .trim();
 
             // 3. STOP AT YEAR LOGIC
-            // Look for (YYYY). If found, take everything up to the end of that year.
-            // This discards .1080p.hevc...
             const yearMatch = cleanTitle.match(/^(.*?\(\d{4}\))/);
             if (yearMatch) {
                 cleanTitle = yearMatch[1];
             }
-            // -----------------------------
 
+            // 4. QUALITIES FILTER
             const qualities = Array.from(new Set(
               item.files
                 .map(f => item.type === 'Music' ? getAudioFormat(f.rawFilename) : f.quality)
-                .filter((q): q is string => typeof q === 'string' && q.trim().length > 0 && !is4KQualityString(q))
+                .filter((q): q is string => {
+                    if (typeof q !== 'string' || q.trim().length === 0) return false;
+                    if (is4KQualityString(q)) return false;
+                    if (remuxTag && (q === '1080p' || q === '1080i')) return false;
+                    return true;
+                })
             )).slice(0, 3);
             
             const owners = Array.from(new Set(item.files.map(f => f.owner))).sort();
@@ -155,20 +158,35 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
               }
             }
 
+            // --- STYLING LOGIC: OWNED vs MISSING ---
             const isMissingItem = hostUser && !owners.includes(hostUser);
-            const borderClass = (missingOnly || isMissingItem) && !selectedId
-                ? 'border border-purple-900/50' 
-                : 'border border-transparent';
+            
+            // Determine Background & Text Classes
+            let bgClass = "";
+            let textClass = "";
+            
+            if (selectedId === item.id) {
+                // SELECTED (Always wins)
+                bgClass = "bg-plex-orange text-white shadow-lg scale-[1.01]";
+                textClass = "text-white"; 
+            } else if (isMissingItem) {
+                // MISSING (Darker Background, Dimmed Text)
+                bgClass = "bg-gray-800/40 hover:bg-gray-800/60";
+                textClass = "text-gray-400"; // Dimmed from normal white/gray
+            } else {
+                // OWNED (Standard)
+                bgClass = "bg-gray-800 hover:bg-gray-700";
+                textClass = "text-gray-200";
+            }
+
+            // Borders are gone, we use background/opacity to distinguish
+            const borderClass = 'border border-transparent';
 
             return (
               <button
                 key={item.id}
                 onClick={() => onSelect(item)}
-                className={`w-full flex items-center p-3 rounded-lg text-left transition-all duration-200 group ${borderClass}
-                  ${selectedId === item.id 
-                    ? 'bg-plex-orange text-white shadow-lg scale-[1.01]' 
-                    : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
-                  }`}
+                className={`w-full flex items-center p-3 rounded-lg text-left transition-all duration-200 group ${borderClass} ${bgClass} ${textClass}`}
               >
                 <div className={`p-2 rounded-full mr-4 ${selectedId === item.id ? 'bg-white/20' : 'bg-gray-700 group-hover:bg-gray-600'}`}>
                   {getIcon(item.type, isAlbumView)}
@@ -180,7 +198,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                         {renderName(cleanTitle, selectedId === item.id)}
                     </span>
                     
-                    {/* EDITION BADGE (Placed at End) */}
                     {editionName && (
                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap flex-none
                          ${selectedId === item.id 
@@ -217,15 +234,30 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
                 </div>
 
                 <div className="flex flex-row items-center ml-2 gap-1">
+                  
                   {remuxTag && (
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm ${selectedId === item.id ? 'border-purple-300 bg-purple-600 text-white' : 'border-purple-500 text-purple-300 bg-purple-900/40'}`}>{remuxTag}</span>
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm 
+                        ${is4K 
+                            ? (selectedId === item.id ? 'border-purple-300 bg-purple-600 text-white' : 'border-purple-500 text-purple-300 bg-purple-900/40')
+                            : (selectedId === item.id ? 'border-blue-300 bg-blue-600 text-white' : 'border-blue-500 text-blue-300 bg-blue-900/40')
+                        }`}>
+                        {remuxTag}
+                    </span>
                   )}
+
                   {is4K && !remuxTag && (
                     <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-black/20 bg-black/20 text-white' : 'border-plex-orange bg-plex-orange text-black'}`}>4K UHD</span>
                   )}
+                  
                   {is3D && (
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-blue-300 bg-blue-500/50 text-white' : 'border-blue-500 text-blue-400 bg-blue-900/30'}`}>3D</span>
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap 
+                        ${selectedId === item.id 
+                            ? 'border-emerald-300 bg-emerald-600 text-white' 
+                            : 'border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]'}`}>
+                        3D
+                    </span>
                   )}
+
                   {qualities.map((q, i) => {
                     const isFlac = q.toUpperCase() === 'FLAC';
                     const defaultStyle = selectedId === item.id ? 'border-white/40 bg-white/10' : 'border-gray-600 bg-gray-700 text-gray-400';
