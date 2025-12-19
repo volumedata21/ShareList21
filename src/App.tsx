@@ -3,7 +3,7 @@ import { MediaItem, MediaFile, FilterType, AppConfig } from './types';
 import { fuzzyMatch, cleanName, getMediaType, getSeriesName, getMusicMetadata } from './utils/mediaUtils';
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
-import DownloadManager from './components/DownloadManager'; // NEW IMPORT
+import DownloadManager from './components/DownloadManager';
 
 const App: React.FC = () => {
   // --- Auth & Config ---
@@ -28,8 +28,12 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterType>('All');
   
-  // --- NEW: Download Manager State ---
+  // --- Download Manager State ---
   const [showDownloads, setShowDownloads] = useState(false);
+
+  // --- NEW: Connection Test State ---
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // --- HISTORY & NAVIGATION HANDLERS ---
   useEffect(() => {
@@ -127,7 +131,6 @@ const App: React.FC = () => {
       if (!res.ok) throw new Error(`Server Error: ${res.status}`);
       
       const data = await res.json();
-      // The server now returns { files: [], nodes: [] } or just the array depending on version
       const files: MediaFile[] = data.files ? data.files : data; 
       
       setFailedAttempts(0);
@@ -244,6 +247,34 @@ const App: React.FC = () => {
       setStatusMsg(null);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // --- NEW: CONNECTION TEST LOGIC ---
+  const handleTestConnection = async () => {
+    if (isTesting) return;
+    setIsTesting(true);
+    setTestResult(null);
+
+    try {
+      const res = await fetch('/api/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-app-pin': activePin }
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        // Success: Green Toast
+        setTestResult({ success: true, message: data.message });
+        setTimeout(() => setTestResult(null), 3000);
+      } else {
+        // Failure: Red Persistent Banner
+        setTestResult({ success: false, message: data.message || "Connection failed" });
+      }
+    } catch (e) {
+      setTestResult({ success: false, message: "Network Error: Could not reach local server." });
+    } finally {
+      setIsTesting(false);
     }
   };
 
@@ -423,6 +454,32 @@ const App: React.FC = () => {
           <div className="flex gap-2 mb-4">
             <input type="text" placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="flex-1 bg-gray-800 border border-gray-700 rounded px-4 py-2 text-white focus:border-plex-orange outline-none" />
             
+            {/* NEW: CONNECTION TEST BUTTON */}
+            {config?.hostUser && (
+              <button
+                onClick={handleTestConnection}
+                disabled={isTesting}
+                className={`p-2 rounded-lg transition-all duration-200 border relative group
+                  ${isTesting 
+                    ? 'bg-gray-800 border-gray-700 text-gray-500 cursor-wait' 
+                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 hover:bg-gray-700'
+                  }`}
+                title="Test Connection to Master"
+              >
+                {isTesting ? (
+                   <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                ) : (
+                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+                   </svg>
+                )}
+                {/* Success Dot */}
+                {testResult?.success && (
+                    <span className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full shadow-lg shadow-green-500/50 animate-ping"></span>
+                )}
+              </button>
+            )}
+
             {/* SCAN ALL BUTTON */}
             {config?.hostUser && (
               <button 
@@ -444,6 +501,33 @@ const App: React.FC = () => {
             ))}
           </div>
         </header>
+
+        {/* --- NEW: Persistent Error Banner --- */}
+        {testResult && !testResult.success && (
+          <div className="bg-red-900/90 border-b border-red-700 p-2 flex items-center justify-between backdrop-blur animate-in slide-in-from-top-2">
+             <div className="flex items-center gap-3 px-2">
+                <div className="p-1 bg-red-800 rounded-full flex-shrink-0">
+                  <svg className="w-3 h-3 text-red-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                </div>
+                <span className="text-xs font-bold text-red-100">{testResult.message}</span>
+             </div>
+             <button 
+               onClick={() => setTestResult(null)} 
+               className="text-red-300 hover:text-white p-1 hover:bg-red-800 rounded transition-colors mr-2"
+             >
+               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+             </button>
+          </div>
+        )}
+
+        {/* --- NEW: Success Toast --- */}
+        {testResult && testResult.success && (
+          <div className="absolute top-20 right-4 z-50 bg-green-600/90 border border-green-500 text-white px-4 py-2 rounded shadow-xl backdrop-blur animate-in fade-in slide-in-from-top-4 flex items-center gap-2 pointer-events-none">
+             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+             <span className="text-sm font-bold">{testResult.message}</span>
+          </div>
+        )}
+
         {statusMsg && <div className="bg-blue-900/30 text-blue-200 text-xs p-2 text-center">{statusMsg}</div>}
         
         <MediaList items={filteredItems} onSelect={handleSelectMedia} selectedId={selectedItem?.id} />
