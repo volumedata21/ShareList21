@@ -31,9 +31,17 @@ const App: React.FC = () => {
   // --- Download Manager State ---
   const [showDownloads, setShowDownloads] = useState(false);
 
-  // --- NEW: Connection Test State ---
+  // --- NEW: Connection Test & Scan Status State ---
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [scanStatus, setScanStatus] = useState<{
+    isRunning: boolean;
+    step: string;
+    localFiles: number;
+    newLocal: number;
+    remoteSummary: string[];
+    error: string | null;
+  } | null>(null);
 
   // --- HISTORY & NAVIGATION HANDLERS ---
   useEffect(() => {
@@ -106,7 +114,8 @@ const App: React.FC = () => {
   const refreshData = async (pinToUse: string) => {
     if (lockoutEnds && Date.now() < lockoutEnds) return;
 
-    setLoading(true);
+    // Only set main loading spinner if we aren't running a detailed scan
+    if (!scanStatus?.isRunning) setLoading(true);
     setAuthError(false);
     try {
       const res = await fetch('/api/files', { headers: { 'x-app-pin': pinToUse } });
@@ -217,12 +226,14 @@ const App: React.FC = () => {
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   };
 
-  // --- SCAN ALL LOGIC ---
+  // --- NEW: SCAN ALL LOGIC (POLLING) ---
   const handleScanAll = async () => {
-    setLoading(true);
-    setStatusMsg(`Scanning local library and syncing...`);
+    if (loading) return;
+    setLoading(true); // Lock the button
+    setScanStatus({ isRunning: true, step: 'Starting...', localFiles: 0, newLocal: 0, remoteSummary: [], error: null });
 
     try {
+      // 1. Trigger Background Scan
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 
@@ -233,24 +244,40 @@ const App: React.FC = () => {
       });
 
       const result = await res.json();
-
       if (!res.ok) throw new Error(result.error || "Scan failed");
 
-      setStatusMsg(result.message);
-      await refreshData(activePin);
-      
-      setTimeout(() => setStatusMsg(null), 4000);
+      // 2. Poll for updates
+      const poll = setInterval(async () => {
+        try {
+          const statusRes = await fetch('/api/scan-status', { headers: { 'x-app-pin': activePin } });
+          const status = await statusRes.json();
+          
+          setScanStatus(status);
+
+          if (!status.isRunning) {
+            clearInterval(poll);
+            setLoading(false); // Unlock button
+            
+            if (status.step === 'Complete') {
+                await refreshData(activePin);
+            }
+            // Auto-hide status after 10s
+            setTimeout(() => setScanStatus(null), 10000);
+          }
+        } catch (e) {
+          clearInterval(poll);
+          setLoading(false);
+        }
+      }, 1000); // Poll every 1s
 
     } catch (err: any) {
       console.error(err);
-      alert(`Scan Error: ${err.message}`);
-      setStatusMsg(null);
-    } finally {
+      setScanStatus({ isRunning: false, step: 'Error', localFiles: 0, newLocal: 0, remoteSummary: [], error: err.message });
       setLoading(false);
     }
   };
 
-  // --- NEW: CONNECTION TEST LOGIC ---
+  // --- NEW: TEST CONNECTION LOGIC ---
   const handleTestConnection = async () => {
     if (isTesting) return;
     setIsTesting(true);
@@ -264,11 +291,9 @@ const App: React.FC = () => {
       const data = await res.json();
       
       if (res.ok && data.success) {
-        // Success: Green Toast
         setTestResult({ success: true, message: data.message });
         setTimeout(() => setTestResult(null), 3000);
       } else {
-        // Failure: Red Persistent Banner
         setTestResult({ success: false, message: data.message || "Connection failed" });
       }
     } catch (e) {
@@ -278,7 +303,7 @@ const App: React.FC = () => {
     }
   };
 
-  // --- FILTER & RANKING LOGIC ---
+  // --- FILTER & RANKING LOGIC (Unchanged) ---
   const filteredItems = useMemo(() => {
     const calculateScore = (text: string, query: string, isPrimary: boolean, type: string) => {
       let score = 0;
@@ -431,7 +456,7 @@ const App: React.FC = () => {
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path fillRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clipRule="evenodd" /></svg>
               </a>
 
-              {/* NEW DOWNLOAD BUTTON */}
+              {/* DOWNLOAD BUTTON */}
               {config?.canDownload && (
                  <button 
                    onClick={() => setShowDownloads(!showDownloads)}
@@ -473,7 +498,6 @@ const App: React.FC = () => {
                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
                    </svg>
                 )}
-                {/* Success Dot */}
                 {testResult?.success && (
                     <span className="absolute top-1 right-1 w-2 h-2 bg-green-500 rounded-full shadow-lg shadow-green-500/50 animate-ping"></span>
                 )}
@@ -487,9 +511,19 @@ const App: React.FC = () => {
                 disabled={loading}
                 className="bg-plex-orange hover:bg-yellow-600 text-black font-bold px-4 py-2 rounded shadow-lg transition-transform transform active:scale-95 flex items-center gap-2 disabled:opacity-50 disabled:scale-100 disabled:cursor-not-allowed"
               >
-                <svg className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
+                {/* Wrapper handles the Spin Animation */}
+                <div className={`${loading ? 'animate-spin' : ''}`}>
+                  {/* SVG handles the Horizontal Flip so arrows point Clockwise */}
+                  <svg 
+                    className="w-4 h-4" 
+                    style={{ transform: 'scaleX(-1)' }} 
+                    fill="none" 
+                    viewBox="0 0 24 24" 
+                    stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </div>
                 {loading ? 'Scanning...' : 'Scan All'}
               </button>
             )}
@@ -528,7 +562,34 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {statusMsg && <div className="bg-blue-900/30 text-blue-200 text-xs p-2 text-center">{statusMsg}</div>}
+        {/* --- UPDATED: Detailed Scan Status Overlay --- */}
+        {scanStatus ? (
+          <div className="bg-blue-900/20 border-b border-blue-500/30 p-3 text-xs text-blue-100 animate-in slide-in-from-top-2">
+             <div className="flex justify-between items-center mb-1">
+                <span className="font-bold uppercase tracking-wider">{scanStatus.step}</span>
+                {scanStatus.isRunning && (
+                  <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                )}
+             </div>
+             <div className="grid grid-cols-2 gap-4 mt-2">
+                <div>
+                   <p className="text-gray-400">Local Files</p>
+                   <p className="font-mono text-lg">{scanStatus.localFiles} <span className="text-green-400 text-xs">({scanStatus.newLocal > 0 ? '+' : ''}{scanStatus.newLocal} new)</span></p>
+                </div>
+                {scanStatus.remoteSummary.length > 0 && (
+                  <div>
+                    <p className="text-gray-400">Remote Sync</p>
+                    <ul className="list-disc list-inside">
+                      {scanStatus.remoteSummary.map((s, i) => <li key={i} className="truncate">{s}</li>)}
+                    </ul>
+                  </div>
+                )}
+             </div>
+             {scanStatus.error && <p className="text-red-400 mt-2 font-bold">Error: {scanStatus.error}</p>}
+          </div>
+        ) : (
+          statusMsg && <div className="bg-blue-900/30 text-blue-200 text-xs p-2 text-center">{statusMsg}</div>
+        )}
         
         <MediaList items={filteredItems} onSelect={handleSelectMedia} selectedId={selectedItem?.id} />
       </div>
@@ -541,7 +602,6 @@ const App: React.FC = () => {
         )}
       </div>
 
-      {/* RENDER THE DOWNLOAD MANAGER HERE */}
       <DownloadManager 
         isOpen={showDownloads} 
         onClose={() => setShowDownloads(false)} 

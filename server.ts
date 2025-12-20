@@ -29,27 +29,9 @@ const MAX_CONCURRENT_DOWNLOADS = 1;
 app.set('trust proxy', 1);
 
 // --- LIMITERS ---
-
-// 1. General API calls
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 1000, 
-  message: { error: "Too many requests." }
-});
-
-// 2. SCANNING (Strict)
-const scanLimiter = rateLimit({
-  windowMs: 60 * 1000, 
-  max: 6, 
-  message: { error: "Scanning too frequently. Please wait 10 seconds." }
-});
-
-// 3. MEDIA SERVING (Generous)
-const mediaLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 10000, 
-  message: { error: "Download quota exceeded. Please wait." }
-});
+const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 1000, message: { error: "Too many requests." } });
+const scanLimiter = rateLimit({ windowMs: 60 * 1000, max: 6, message: { error: "Scanning too frequently. Please wait 10 seconds." } });
+const mediaLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10000, message: { error: "Download quota exceeded. Please wait." } });
 
 // --- DB & ENV ---
 const DB_PATH = '/data/sharelist.db';
@@ -74,6 +56,17 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   else console.log(`Connected to SQLite DB. Running as user: ${HOST_USER}`);
 });
 
+// --- GLOBAL SCAN STATUS (NEW) ---
+// Tracks the state of the scanner for the UI
+let scanStatus = {
+  isRunning: false,
+  step: 'Idle', 
+  localFiles: 0,
+  newLocal: 0,
+  remoteSummary: [] as string[], 
+  error: null as string | null
+};
+
 // --- DOWNLOAD STATE ---
 interface DownloadStatus {
   id: string;
@@ -95,6 +88,14 @@ const activeDownloads = new Map<string, DownloadStatus>();
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 // --- DB HELPERS ---
+const getFileCount = (owner: string): Promise<number> => {
+  return new Promise((resolve) => {
+    db.get("SELECT COUNT(*) as count FROM media_files WHERE owner = ?", [owner], (err, row: any) => {
+      resolve(row ? row.count : 0);
+    });
+  });
+};
+
 const registerNode = (owner: string, url: string): Promise<void> => {
   return new Promise((resolve, reject) => {
     db.run(`INSERT INTO nodes (owner, url) VALUES (?, ?) 
@@ -200,35 +201,93 @@ const requireSecret = async (req: Request, res: Response, next: NextFunction) =>
   next();
 };
 
-// --- CORE LOGIC ---
+// --- CORE SCANNER LOGIC (Refactored to avoid Race Conditions) ---
+
 const performLocalScan = async () => {
   if (!fs.existsSync(MEDIA_ROOT)) return [];
-  console.log(`[Scanner] Scanning local media for ${HOST_USER}...`);
-  const files = await processFiles(MEDIA_ROOT, HOST_USER);
-  await replaceUserFiles(HOST_USER, files); 
-  if (NODE_URL) await registerNode(HOST_USER, NODE_URL);
-  return files;
+  console.log(`[Scanner] Reading local disk for ${HOST_USER}...`);
+  return await processFiles(MEDIA_ROOT, HOST_USER);
 };
 
-const syncWithMaster = async (localFiles: MediaFile[]) => {
-  if (!MASTER_URL) return; 
-  try {
-    const pushRes = await fetch(`${MASTER_URL}/api/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-sync-secret': SYNC_SECRET || '' },
-      body: JSON.stringify({ owner: HOST_USER, url: NODE_URL, files: localFiles })
-    });
-    if (!pushRes.ok) throw new Error(`Push failed: ${pushRes.statusText}`);
+const runFullScan = async (forcedOwner?: string) => {
+  // Prevent overlapping scans (Race Condition Fix)
+  if (scanStatus.isRunning) {
+    console.log("[Scanner] Skip: Scan already in progress.");
+    return;
+  }
 
-    const pullRes = await fetch(`${MASTER_URL}/api/files`, { headers: { 'x-app-pin': APP_PIN || '' } });
-    if (!pullRes.ok) throw new Error(`Pull failed: ${pullRes.statusText}`);
-    
-    const data = await pullRes.json();
-    if (data.files && data.nodes) {
-        await updateExternalCache(data.files, data.nodes);
+  scanStatus = { isRunning: true, step: 'Initializing', localFiles: 0, newLocal: 0, remoteSummary: [], error: null };
+  const owner = forcedOwner || HOST_USER;
+
+  try {
+    const countBefore = await getFileCount(HOST_USER);
+
+    // 1. Local Scan
+    scanStatus.step = 'Scanning Local Disk...';
+    if (owner === 'ALL' && !MASTER_URL) {
+       const files = await performLocalScan();
+       const countAfter = await getFileCount(HOST_USER);
+       // Update DB if local only
+       await replaceUserFiles(HOST_USER, files);
+       
+       scanStatus.localFiles = files.length;
+       scanStatus.newLocal = Math.max(0, countAfter - countBefore);
+       scanStatus.step = 'Complete';
+       return;
     }
-  } catch (err: any) {
-    console.error(`[Sync Error] Could not reach Master: ${err.message}.`);
+    
+    // 2. Perform Scan & Local Save
+    const files = await performLocalScan();
+    await replaceUserFiles(HOST_USER, files); 
+    if (NODE_URL) await registerNode(HOST_USER, NODE_URL);
+
+    const countAfter = await getFileCount(HOST_USER);
+    scanStatus.localFiles = files.length;
+    scanStatus.newLocal = Math.max(0, countAfter - countBefore);
+
+    // 3. Sync with Master
+    if (MASTER_URL) { 
+      scanStatus.step = 'Syncing with Master...';
+      
+      // PUSH
+      try {
+        const pushRes = await fetch(`${MASTER_URL}/api/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-sync-secret': SYNC_SECRET || '' },
+          body: JSON.stringify({ owner: HOST_USER, url: NODE_URL, files })
+        });
+        if (!pushRes.ok) throw new Error(`Push failed: ${pushRes.statusText}`);
+        scanStatus.remoteSummary.push(`Pushed to Master: Success`);
+      } catch(e: any) {
+        scanStatus.remoteSummary.push(`Push Failed: ${e.message}`);
+        console.error(e);
+      }
+
+      // PULL
+      try {
+        const pullRes = await fetch(`${MASTER_URL}/api/files`, { headers: { 'x-app-pin': APP_PIN || '' } });
+        if (!pullRes.ok) throw new Error(`Pull failed: ${pullRes.statusText}`);
+        const data = await pullRes.json();
+        if (data.files && data.nodes) {
+            const users = new Set(data.files.map((f:any) => f.owner));
+            users.delete(HOST_USER); 
+            const totalExternal = data.files.filter((f:any) => f.owner !== HOST_USER).length;
+            await updateExternalCache(data.files, data.nodes);
+            scanStatus.remoteSummary.push(`Synced ${users.size} other users (${totalExternal} files).`);
+        }
+      } catch (err: any) {
+        scanStatus.remoteSummary.push(`Pull Failed: ${err.message}`);
+        console.error(err);
+      }
+    }
+
+    scanStatus.step = 'Complete';
+  } catch (e: any) {
+    console.error("[Scanner] Error:", e.message);
+    scanStatus.error = e.message;
+    scanStatus.step = 'Error';
+  } finally {
+    scanStatus.isRunning = false;
   }
 };
 
@@ -243,17 +302,10 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
   if (!DOWNLOAD_ROOT) throw new Error("No Download Root configured.");
   
   if (fs.existsSync(localPath)) {
-    console.log(`[Download SKIP] File already exists: ${localPath}`);
     const job = activeDownloads.get(jobId);
     if (job) {
        const stats = fs.statSync(localPath);
-       activeDownloads.set(jobId, { 
-         ...job, 
-         status: 'skipped', 
-         totalBytes: stats.size,
-         downloadedBytes: stats.size,
-         speed: 0 
-       });
+       activeDownloads.set(jobId, { ...job, status: 'skipped', totalBytes: stats.size, downloadedBytes: stats.size, speed: 0 });
     }
     return;
   }
@@ -475,24 +527,58 @@ app.get('/api/serve', mediaLimiter, requireSecret, (req, res) => {
   fs.createReadStream(absolutePath).pipe(res);
 });
 
-app.post('/api/scan', scanLimiter, requirePin, async (req, res) => {
-  const owner = req.body.owner;
-  if (owner === 'ALL' && !MASTER_URL) {
-    try {
-      await performLocalScan();
-      res.json({ success: true, message: "Local Library Scanned." });
-    } catch (e: any) { res.status(500).json({ error: e.message }); }
-    return;
+// --- CONNECTION TESTING ROUTES ---
+
+app.get('/api/ping', requireSecret, (req, res) => {
+  res.json({ success: true, message: 'Pong', role: MASTER_URL ? 'Satellite' : 'Master' });
+});
+
+app.post('/api/test-connection', generalLimiter, requirePin, async (req, res) => {
+  if (!MASTER_URL) {
+    return res.json({ success: true, message: "Running in Master/Local Mode (No Master URL set)" });
   }
   try {
-    const files = await performLocalScan();
-    if (MASTER_URL) { await syncWithMaster(files); }
-    res.json({ success: true, count: files.length, message: "Sync Complete." });
-  } catch (e: any) {
-    res.json({ success: true, count: 0, message: "Local scan done, but sync failed." });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
+    const response = await fetch(`${MASTER_URL}/api/ping`, {
+      headers: { 'x-sync-secret': SYNC_SECRET || '' },
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    if (response.ok) {
+      res.json({ success: true, message: "Connected to Master successfully." });
+    } else if (response.status === 401 || response.status === 403) {
+      res.status(401).json({ success: false, message: "Authentication Failed: Check SYNC_SECRET." });
+    } else if (response.status === 404) {
+      res.status(404).json({ success: false, message: "Server found, but API missing. Check MASTER_URL." });
+    } else {
+      res.status(500).json({ success: false, message: `Master returned status ${response.status}` });
+    }
+  } catch (err: any) {
+    const msg = err.name === 'AbortError' ? 'Connection Timed Out (5s)' : (err.message || 'Network Error');
+    res.status(500).json({ success: false, message: `Connection Failed: ${msg}` });
   }
 });
 
+// --- UPDATED SCANNING LOGIC (Async + Centralized) ---
+
+// 1. Status Endpoint
+app.get('/api/scan-status', requirePin, (req, res) => {
+  res.json(scanStatus);
+});
+
+// 2. Trigger Scan
+app.post('/api/scan', scanLimiter, requirePin, (req, res) => {
+  if (scanStatus.isRunning) return res.status(409).json({ error: "Scan already in progress." });
+  
+  // Immediately reply to avoid 504 Timeout
+  res.json({ success: true, message: "Scan started in background." });
+  
+  // Run scan in background
+  runFullScan(req.body.owner);
+});
+
+// 3. Receive Sync (Keep existing logic)
 app.post('/api/sync', generalLimiter, requireSecret, async (req, res) => {
   const { owner, files, url } = req.body as SyncPayload;
   if (MASTER_URL) { res.status(400).json({ error: "Satellite cannot receive sync." }); return; }
@@ -521,45 +607,6 @@ app.get('/api/files', requirePin, (req, res) => {
   });
 });
 
-// --- NEW ROUTES FOR CONNECTION TESTING ---
-
-// 1. Health check (Used by remote satellites to test secret)
-app.get('/api/ping', requireSecret, (req, res) => {
-  res.json({ success: true, message: 'Pong', role: MASTER_URL ? 'Satellite' : 'Master' });
-});
-
-// 2. Test Connection (Used by local client to test Master)
-app.post('/api/test-connection', generalLimiter, requirePin, async (req, res) => {
-  if (!MASTER_URL) {
-    return res.json({ success: true, message: "Running in Master/Local Mode (No Master URL set)" });
-  }
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
-
-    const response = await fetch(`${MASTER_URL}/api/ping`, {
-      headers: { 'x-sync-secret': SYNC_SECRET || '' },
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeout);
-
-    if (response.ok) {
-      res.json({ success: true, message: "Connected to Master successfully." });
-    } else if (response.status === 401 || response.status === 403) {
-      res.status(401).json({ success: false, message: "Authentication Failed: Check SYNC_SECRET." });
-    } else if (response.status === 404) {
-      res.status(404).json({ success: false, message: "Server found, but API missing. Check MASTER_URL." });
-    } else {
-      res.status(500).json({ success: false, message: `Master returned status ${response.status}` });
-    }
-  } catch (err: any) {
-    const msg = err.name === 'AbortError' ? 'Connection Timed Out (5s)' : (err.message || 'Network Error');
-    res.status(500).json({ success: false, message: `Connection Failed: ${msg}` });
-  }
-});
-
 // ----------------------------------------
 
 app.get('*', (req, res) => {
@@ -567,14 +614,10 @@ app.get('*', (req, res) => {
 });
 
 // --- CRON ---
-const scheduledScan = async () => {
-  const files = await performLocalScan();
-  try { await syncWithMaster(files); } catch(e) {} 
-};
-
-setTimeout(scheduledScan, 5000); 
+// Calls the new centralized scanner to prevent race conditions
+setTimeout(() => runFullScan(), 5000); 
 if (cron.validate(CRON_SCHEDULE)) {
-  cron.schedule(CRON_SCHEDULE, scheduledScan);
+  cron.schedule(CRON_SCHEDULE, () => runFullScan());
 }
 
 // --- SERVER START ---
