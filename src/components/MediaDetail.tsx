@@ -2,9 +2,12 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, MediaFile, AppConfig } from '../types';
 import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
+// --- PROPS UPDATE ---
 interface MediaDetailProps {
   item: MediaItem;
   onClose: () => void;
+  activeDownloads?: any[];      // Passed from App.tsx
+  downloadedFiles?: Set<string>; // Passed from App.tsx
 }
 
 interface ProcessedFile extends MediaFile {
@@ -20,14 +23,13 @@ interface ProcessedFile extends MediaFile {
   editionTag?: string | null;
 }
 
-// --- SHARED ICON LOGIC (Same as MediaList) ---
 const getIcon = (type: string, isAlbum = false) => {
   switch (type) {
     case 'Movie': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>;
     case 'TV Show': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
     case 'Music': return isAlbum 
-      ? <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg> // Library Icon
-      : <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>; // Music Note
+      ? <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg> 
+      : <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>;
     default: return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>;
   }
 };
@@ -37,13 +39,14 @@ const getEditionTag = (filename: string): string | null => {
   return match ? match[1] : null;
 };
 
-const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
+const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownloads = [], downloadedFiles = new Set() }) => {
   const [loadedFiles, setLoadedFiles] = useState<ProcessedFile[]>([]);
   const [copiedState, setCopiedState] = useState<string | null>(null);
   const [filterOwner, setFilterOwner] = useState<string | null>(null);
-  
   const [canDownload, setCanDownload] = useState(false);
   const [currentUser, setCurrentUser] = useState<string>('');
+  
+  // Note: We keep local downloadingIds for immediate feedback on click
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<number>>(new Set());
 
@@ -77,6 +80,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
         })
       });
       if (!res.ok) throw new Error("Failed");
+      // Remove from local "clicked" state after 2s, polling will pick it up
       setTimeout(() => {
         setDownloadingIds(prev => {
           const next = new Set(prev);
@@ -232,8 +236,27 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
   };
 
   const renderFileCard = (file: ProcessedFile) => {
-    const isDownloading = downloadingIds.has(file.path);
+    // 1. Is it newly clicked?
+    const isJustClicked = downloadingIds.has(file.path);
+    // 2. Is it currently downloading? (Poll)
+    const activeDownload = activeDownloads.find(d => 
+        (d.remotePath && d.remotePath === file.path) || 
+        (d.filename.includes(file.rawFilename))
+    );
     
+    let isDownloading = isJustClicked;
+    let progressPercent = 0;
+    
+    if (activeDownload && (activeDownload.status === 'downloading' || activeDownload.status === 'pending')) {
+        isDownloading = true;
+        if (activeDownload.totalBytes > 0) {
+            progressPercent = Math.round((activeDownload.downloadedBytes / activeDownload.totalBytes) * 100);
+        }
+    }
+
+    // 3. Is it already in library? (Inventory)
+    const isAlreadyDownloaded = !isDownloading && downloadedFiles.has(file.rawFilename);
+
     return (
       <div key={file.id || file.path} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors mb-4 last:mb-0">
         <div className="p-4 bg-gray-900 border-b border-gray-800 flex justify-between items-start gap-4">
@@ -272,17 +295,27 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
             
             {canDownload && file.owner !== currentUser && (
               <button 
-                onClick={() => handleDownload(file)}
-                disabled={isDownloading}
-                className={`text-[10px] font-bold uppercase px-3 py-1.5 rounded flex items-center gap-2 transition-all
+                onClick={() => !isDownloading && !isAlreadyDownloaded && handleDownload(file)}
+                disabled={isDownloading || isAlreadyDownloaded}
+                className={`relative overflow-hidden text-[10px] font-bold uppercase px-3 py-1.5 rounded flex items-center gap-2 transition-all shadow-lg
                   ${isDownloading 
-                    ? 'bg-blue-600/50 text-blue-200 cursor-not-allowed' 
-                    : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg'}`}
+                    ? 'text-white cursor-not-allowed border border-blue-500/50' 
+                    : isAlreadyDownloaded
+                        ? 'bg-green-700/50 text-green-200 border border-green-600 cursor-not-allowed'
+                        : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+                style={isDownloading ? {
+                    background: `linear-gradient(to right, #2563eb ${progressPercent}%, #1e293b ${progressPercent}%)`
+                } : {}}
               >
                 {isDownloading ? (
                   <>
                     <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    <span>Queued</span>
+                    <span className="relative z-10 drop-shadow-md">{progressPercent > 0 ? `${progressPercent}%` : 'Queued'}</span>
+                  </>
+                ) : isAlreadyDownloaded ? (
+                  <>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                    <span>Downloaded</span>
                   </>
                 ) : (
                   <>
@@ -382,14 +415,13 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
            {Object.keys(albums).sort().map(albumName => {
              const albumFiles = albums[albumName];
-             const downloadableFiles = albumFiles.filter(f => f.owner !== currentUser);
+             const downloadableFiles = albumFiles.filter(f => f.owner !== currentUser && !downloadedFiles.has(f.rawFilename));
              const hasDownloads = canDownload && downloadableFiles.length > 0;
 
              return (
                <div key={albumName} className="space-y-3">
                  <div className="flex items-center justify-between border-b border-gray-700 pb-2">
                     <h3 className="text-lg font-bold text-gray-300 flex items-center gap-2">
-                        {/* UPDATE: Use Library Icon for Album Headers */}
                         <svg className="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
                         {albumName}
                     </h3>
@@ -406,7 +438,11 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
 
                  <div className="space-y-2">
                    {albumFiles.map(file => {
-                       const isDownloading = downloadingIds.has(file.path);
+                       const activeDownload = activeDownloads.find(d => (d.remotePath && d.remotePath === file.path) || (d.filename.includes(file.rawFilename)));
+                       let isDownloading = downloadingIds.has(file.path);
+                       if (activeDownload && (activeDownload.status === 'downloading' || activeDownload.status === 'pending')) isDownloading = true;
+                       const isAlreadyDownloaded = !isDownloading && downloadedFiles.has(file.rawFilename);
+
                        return (
                          <div key={file.id || file.path} className="flex items-center justify-between bg-gray-900/50 p-3 rounded border border-gray-800 hover:border-gray-600 transition-colors group">
                            <div className="min-w-0 flex-1 pr-4">
@@ -427,15 +463,19 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose }) => {
                              <div className="text-xs font-mono text-gray-500">{file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}</div>
                              {canDownload && file.owner !== currentUser && (
                                <button 
-                                 onClick={() => handleDownload(file)}
-                                 disabled={isDownloading}
+                                 onClick={() => !isDownloading && !isAlreadyDownloaded && handleDownload(file)}
+                                 disabled={isDownloading || isAlreadyDownloaded}
                                  className={`p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 focus:opacity-100
                                    ${isDownloading 
                                      ? 'bg-blue-600/50 text-blue-200 cursor-not-allowed opacity-100' 
-                                     : 'bg-gray-700 hover:bg-blue-600 text-gray-300 hover:text-white'}`}
+                                     : isAlreadyDownloaded
+                                        ? 'text-green-500 cursor-not-allowed opacity-100'
+                                        : 'bg-gray-700 hover:bg-blue-600 text-gray-300 hover:text-white'}`}
                                >
                                   {isDownloading ? (
                                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                                  ) : isAlreadyDownloaded ? (
+                                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                                   ) : (
                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                                   )}

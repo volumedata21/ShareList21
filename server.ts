@@ -56,8 +56,8 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
   else console.log(`Connected to SQLite DB. Running as user: ${HOST_USER}`);
 });
 
-// --- GLOBAL SCAN STATUS (NEW) ---
-// Tracks the state of the scanner for the UI
+// --- GLOBAL SCAN STATUS ---
+// Used for polling UI updates
 let scanStatus = {
   isRunning: false,
   step: 'Idle', 
@@ -201,8 +201,7 @@ const requireSecret = async (req: Request, res: Response, next: NextFunction) =>
   next();
 };
 
-// --- CORE SCANNER LOGIC (Refactored to avoid Race Conditions) ---
-
+// --- CORE SCANNER LOGIC ---
 const performLocalScan = async () => {
   if (!fs.existsSync(MEDIA_ROOT)) return [];
   console.log(`[Scanner] Reading local disk for ${HOST_USER}...`);
@@ -210,7 +209,6 @@ const performLocalScan = async () => {
 };
 
 const runFullScan = async (forcedOwner?: string) => {
-  // Prevent overlapping scans (Race Condition Fix)
   if (scanStatus.isRunning) {
     console.log("[Scanner] Skip: Scan already in progress.");
     return;
@@ -227,7 +225,6 @@ const runFullScan = async (forcedOwner?: string) => {
     if (owner === 'ALL' && !MASTER_URL) {
        const files = await performLocalScan();
        const countAfter = await getFileCount(HOST_USER);
-       // Update DB if local only
        await replaceUserFiles(HOST_USER, files);
        
        scanStatus.localFiles = files.length;
@@ -249,7 +246,6 @@ const runFullScan = async (forcedOwner?: string) => {
     if (MASTER_URL) { 
       scanStatus.step = 'Syncing with Master...';
       
-      // PUSH
       try {
         const pushRes = await fetch(`${MASTER_URL}/api/sync`, {
           method: 'POST',
@@ -263,7 +259,6 @@ const runFullScan = async (forcedOwner?: string) => {
         console.error(e);
       }
 
-      // PULL
       try {
         const pullRes = await fetch(`${MASTER_URL}/api/files`, { headers: { 'x-app-pin': APP_PIN || '' } });
         if (!pullRes.ok) throw new Error(`Pull failed: ${pullRes.statusText}`);
@@ -409,6 +404,33 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
 // --- ROUTES ---
 
+// NEW: Helper to get recursive filenames for inventory check
+const getRecursiveFilenames = (dir: string): string[] => {
+  let results: string[] = [];
+  if (!fs.existsSync(dir)) return results;
+  const list = fs.readdirSync(dir);
+  list.forEach(file => {
+    const filePath = path.join(dir, file);
+    const stat = fs.statSync(filePath);
+    if (stat && stat.isDirectory()) { 
+      results = results.concat(getRecursiveFilenames(filePath));
+    } else { 
+      results.push(file); 
+    }
+  });
+  return results;
+};
+
+// NEW: Inventory Route
+app.get('/api/inventory', requirePin, (req, res) => {
+  try {
+    const files = getRecursiveFilenames(DOWNLOAD_ROOT);
+    res.json(files);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/download', generalLimiter, requirePin, async (req, res) => {
   const { path: singlePath, filename: singleFilename, files, owner, folderName } = req.body;
   let newJobs: { remotePath: string, filename: string }[] = [];
@@ -488,9 +510,7 @@ app.post('/api/download/retry', requirePin, async (req, res) => {
 
 app.post('/api/downloads/clear', requirePin, (req, res) => {
   for (const [id, job] of activeDownloads.entries()) {
-    if (job.status === 'completed' || job.status === 'cancelled' || job.status === 'error' || job.status === 'skipped') {
-      activeDownloads.delete(id);
-    }
+    if (['completed','cancelled','error','skipped'].includes(job.status)) activeDownloads.delete(id);
   }
   res.json({ success: true });
 });
@@ -539,7 +559,7 @@ app.post('/api/test-connection', generalLimiter, requirePin, async (req, res) =>
   }
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
+    const timeout = setTimeout(() => controller.abort(), 5000); 
     const response = await fetch(`${MASTER_URL}/api/ping`, {
       headers: { 'x-sync-secret': SYNC_SECRET || '' },
       signal: controller.signal
@@ -560,25 +580,19 @@ app.post('/api/test-connection', generalLimiter, requirePin, async (req, res) =>
   }
 });
 
-// --- UPDATED SCANNING LOGIC (Async + Centralized) ---
-
-// 1. Status Endpoint
+// --- SCANNING (Async/Poll) ---
 app.get('/api/scan-status', requirePin, (req, res) => {
   res.json(scanStatus);
 });
 
-// 2. Trigger Scan
 app.post('/api/scan', scanLimiter, requirePin, (req, res) => {
   if (scanStatus.isRunning) return res.status(409).json({ error: "Scan already in progress." });
   
-  // Immediately reply to avoid 504 Timeout
+  // Fire and forget
   res.json({ success: true, message: "Scan started in background." });
-  
-  // Run scan in background
   runFullScan(req.body.owner);
 });
 
-// 3. Receive Sync (Keep existing logic)
 app.post('/api/sync', generalLimiter, requireSecret, async (req, res) => {
   const { owner, files, url } = req.body as SyncPayload;
   if (MASTER_URL) { res.status(400).json({ error: "Satellite cannot receive sync." }); return; }
@@ -614,7 +628,6 @@ app.get('*', (req, res) => {
 });
 
 // --- CRON ---
-// Calls the new centralized scanner to prevent race conditions
 setTimeout(() => runFullScan(), 5000); 
 if (cron.validate(CRON_SCHEDULE)) {
   cron.schedule(CRON_SCHEDULE, () => runFullScan());
