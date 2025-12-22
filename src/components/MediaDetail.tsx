@@ -2,12 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, MediaFile, AppConfig } from '../types';
 import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
-// --- PROPS UPDATE ---
+// --- PROPS ---
 interface MediaDetailProps {
   item: MediaItem;
   onClose: () => void;
-  activeDownloads?: any[];      // Passed from App.tsx
-  downloadedFiles?: Set<string>; // Passed from App.tsx
+  activeDownloads?: any[];
+  completeFiles?: Set<string>; 
+  partialFiles?: Set<string>;
 }
 
 interface ProcessedFile extends MediaFile {
@@ -26,7 +27,7 @@ interface ProcessedFile extends MediaFile {
 const getIcon = (type: string, isAlbum = false) => {
   switch (type) {
     case 'Movie': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>;
-    case 'TV Show': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
+    case 'TV Show': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
     case 'Music': return isAlbum 
       ? <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg> 
       : <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>;
@@ -39,14 +40,18 @@ const getEditionTag = (filename: string): string | null => {
   return match ? match[1] : null;
 };
 
-const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownloads = [], downloadedFiles = new Set() }) => {
+const MediaDetail: React.FC<MediaDetailProps> = ({ 
+  item, 
+  onClose, 
+  activeDownloads = [], 
+  completeFiles = new Set(), // SAFETY: Default to empty Set
+  partialFiles = new Set()   // SAFETY: Default to empty Set
+}) => {
   const [loadedFiles, setLoadedFiles] = useState<ProcessedFile[]>([]);
   const [copiedState, setCopiedState] = useState<string | null>(null);
   const [filterOwner, setFilterOwner] = useState<string | null>(null);
   const [canDownload, setCanDownload] = useState(false);
   const [currentUser, setCurrentUser] = useState<string>('');
-  
-  // Note: We keep local downloadingIds for immediate feedback on click
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<number>>(new Set());
 
@@ -80,7 +85,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
         })
       });
       if (!res.ok) throw new Error("Failed");
-      // Remove from local "clicked" state after 2s, polling will pick it up
       setTimeout(() => {
         setDownloadingIds(prev => {
           const next = new Set(prev);
@@ -100,10 +104,15 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
 
   const handleBatchDownload = async (files: ProcessedFile[]) => {
     const pin = sessionStorage.getItem('pf_pin') || '';
-    const filesToDownload = files.filter(f => f.owner !== currentUser);
+    
+    // Resume Logic for Batch: Include partials, exclude complete
+    const filesToDownload = files.filter(f => 
+        f.owner !== currentUser && 
+        !completeFiles.has(f.rawFilename)
+    );
     
     if (filesToDownload.length === 0) {
-        alert("You already own all files in this set!");
+        alert("All files in this set are already downloaded.");
         return;
     }
 
@@ -254,8 +263,9 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
         }
     }
 
-    // 3. Is it already in library? (Inventory)
-    const isAlreadyDownloaded = !isDownloading && downloadedFiles.has(file.rawFilename);
+    // 3. Status Checks
+    const isCompleted = !isDownloading && completeFiles.has(file.rawFilename);
+    const isPartial = !isDownloading && !isCompleted && partialFiles.has(file.rawFilename);
 
     return (
       <div key={file.id || file.path} className="bg-gray-900/50 rounded-xl border border-gray-700 overflow-hidden hover:border-gray-500 transition-colors mb-4 last:mb-0">
@@ -295,14 +305,16 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
             
             {canDownload && file.owner !== currentUser && (
               <button 
-                onClick={() => !isDownloading && !isAlreadyDownloaded && handleDownload(file)}
-                disabled={isDownloading || isAlreadyDownloaded}
+                onClick={() => !isDownloading && !isCompleted && handleDownload(file)}
+                disabled={isDownloading || isCompleted}
                 className={`relative overflow-hidden text-[10px] font-bold uppercase px-3 py-1.5 rounded flex items-center gap-2 transition-all shadow-lg
                   ${isDownloading 
                     ? 'text-white cursor-not-allowed border border-blue-500/50' 
-                    : isAlreadyDownloaded
+                    : isCompleted
                         ? 'bg-green-700/50 text-green-200 border border-green-600 cursor-not-allowed'
-                        : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+                        : isPartial
+                            ? 'bg-yellow-600 hover:bg-yellow-500 text-white border border-yellow-500 animate-pulse'
+                            : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
                 style={isDownloading ? {
                     background: `linear-gradient(to right, #2563eb ${progressPercent}%, #1e293b ${progressPercent}%)`
                 } : {}}
@@ -312,10 +324,15 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
                     <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                     <span className="relative z-10 drop-shadow-md">{progressPercent > 0 ? `${progressPercent}%` : 'Queued'}</span>
                   </>
-                ) : isAlreadyDownloaded ? (
+                ) : isCompleted ? (
                   <>
                     <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
                     <span>Downloaded</span>
+                  </>
+                ) : isPartial ? (
+                  <>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span>Resume</span>
                   </>
                 ) : (
                   <>
@@ -415,7 +432,8 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
 
            {Object.keys(albums).sort().map(albumName => {
              const albumFiles = albums[albumName];
-             const downloadableFiles = albumFiles.filter(f => f.owner !== currentUser && !downloadedFiles.has(f.rawFilename));
+             // Filter complete files out of "Download All" for albums too
+             const downloadableFiles = albumFiles.filter(f => f.owner !== currentUser && !completeFiles.has(f.rawFilename));
              const hasDownloads = canDownload && downloadableFiles.length > 0;
 
              return (
@@ -438,10 +456,16 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
 
                  <div className="space-y-2">
                    {albumFiles.map(file => {
-                       const activeDownload = activeDownloads.find(d => (d.remotePath && d.remotePath === file.path) || (d.filename.includes(file.rawFilename)));
-                       let isDownloading = downloadingIds.has(file.path);
-                       if (activeDownload && (activeDownload.status === 'downloading' || activeDownload.status === 'pending')) isDownloading = true;
-                       const isAlreadyDownloaded = !isDownloading && downloadedFiles.has(file.rawFilename);
+                       // 1. Downloading?
+                       const activeDownload = activeDownloads.find(d => 
+                           (d.remotePath && d.remotePath === file.path) || 
+                           (d.filename.includes(file.rawFilename))
+                       );
+                       const isDownloading = downloadingIds.has(file.path) || (activeDownload && (activeDownload.status === 'downloading' || activeDownload.status === 'pending'));
+                       
+                       // 2. Status
+                       const isCompleted = !isDownloading && completeFiles.has(file.rawFilename);
+                       const isPartial = !isDownloading && !isCompleted && partialFiles.has(file.rawFilename);
 
                        return (
                          <div key={file.id || file.path} className="flex items-center justify-between bg-gray-900/50 p-3 rounded border border-gray-800 hover:border-gray-600 transition-colors group">
@@ -463,19 +487,23 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
                              <div className="text-xs font-mono text-gray-500">{file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : '...'}</div>
                              {canDownload && file.owner !== currentUser && (
                                <button 
-                                 onClick={() => !isDownloading && !isAlreadyDownloaded && handleDownload(file)}
-                                 disabled={isDownloading || isAlreadyDownloaded}
+                                 onClick={() => !isDownloading && !isCompleted && handleDownload(file)}
+                                 disabled={isDownloading || isCompleted}
                                  className={`p-1.5 rounded transition-all opacity-0 group-hover:opacity-100 focus:opacity-100
                                    ${isDownloading 
                                      ? 'bg-blue-600/50 text-blue-200 cursor-not-allowed opacity-100' 
-                                     : isAlreadyDownloaded
+                                     : isCompleted
                                         ? 'text-green-500 cursor-not-allowed opacity-100'
-                                        : 'bg-gray-700 hover:bg-blue-600 text-gray-300 hover:text-white'}`}
+                                        : isPartial
+                                            ? 'text-yellow-500 hover:text-white opacity-100 animate-pulse'
+                                            : 'bg-gray-700 hover:bg-blue-600 text-gray-300 hover:text-white'}`}
                                >
                                   {isDownloading ? (
                                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                                  ) : isAlreadyDownloaded ? (
+                                  ) : isCompleted ? (
                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                                  ) : isPartial ? (
+                                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                                   ) : (
                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                                   )}
@@ -547,7 +575,10 @@ const MediaDetail: React.FC<MediaDetailProps> = ({ item, onClose, activeDownload
                      const isExpanded = expandedSeasons.has(seasonNum);
                      const files = groupedSeasons[seasonNum];
                      const seasonTitle = seasonNum === 0 ? 'Specials' : `Season ${seasonNum}`;
-                     const downloadableFiles = files.filter(f => f.owner !== currentUser);
+                     
+                     // Filter out COMPLETE files from the "Download Season" button
+                     // Include PARTIAL files so they can be resumed in batch
+                     const downloadableFiles = files.filter(f => f.owner !== currentUser && !completeFiles.has(f.rawFilename));
                      const hasDownloads = canDownload && downloadableFiles.length > 0;
 
                      return (

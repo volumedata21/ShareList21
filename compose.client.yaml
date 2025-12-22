@@ -7,17 +7,19 @@ services:
       - "5021:80" #Frontend
     volumes:
       - ./data:/data  # Folder for app's database
-      - /location/of/your/Movies:/media/movies
       - /location/for/Downloads:/downloads
+      - /location/of/your/Movies:/media/movies
 #     - /location/of/your/TV:/media/tv
 #     - /location/of/your/Music:/media/music
 #     - /location/of/your/media:/media
     environment:
-      - APP_PIN=1234
+      - APP_PIN=1234 # Change this
       - SYNC_SECRET=REPLACEME # Must match host's SYNC_SECRET
       - HOST_USER=Lamar # Your username, must be exactly as written in host's compose file.
       - MASTER_URL=https://replace-me-with-the-hostserver.com # URL of host's server
       - MEDIA_ROOT=/media
       - DOWNLOAD_ROOT=/downloads
-      - NODE_URL=http://clients_public_address:5021
+      - NODE_URL=http://clients_public_address:5021 # Do NOT use a trailing slash, eg https://site.com/
       - CRON_SCHEDULE=0 3 * * * # Optional, auto sync at 3 AM
+
+# App pin can be any length and combination of numbers and letters.
