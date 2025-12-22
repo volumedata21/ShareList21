@@ -38,10 +38,15 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<FilterType>('All');
   
-  // --- Download & Inventory State (UPDATED) ---
+  // --- Download & Inventory State ---
   const [showDownloads, setShowDownloads] = useState(false);
   const [activeDownloads, setActiveDownloads] = useState<DownloadItem[]>([]);
-  const [downloadedFiles, setDownloadedFiles] = useState<Set<string>>(new Set()); // New Inventory State
+  
+  // NEW: State object to track both complete files and partial (.part) files
+  const [inventory, setInventory] = useState<{ complete: Set<string>, partials: Set<string> }>({ 
+    complete: new Set(), 
+    partials: new Set() 
+  });
 
   // --- Connection Test & Scan Status State ---
   const [isTesting, setIsTesting] = useState(false);
@@ -55,21 +60,31 @@ const App: React.FC = () => {
     error: string | null;
   } | null>(null);
 
-  // --- POLLING: Downloads & Inventory (UPDATED) ---
+  // --- POLLING: Downloads & Inventory ---
   useEffect(() => {
     if (isLocked || !activePin) return;
 
     const fetchDownloads = () => {
       fetch('/api/downloads', { headers: { 'x-app-pin': activePin } })
         .then(res => res.json())
-        .then((data: DownloadItem[]) => setActiveDownloads(data))
+        .then((data: any) => {
+            if (Array.isArray(data)) setActiveDownloads(data);
+        })
         .catch(console.error);
     };
 
     const fetchInventory = () => {
       fetch('/api/inventory', { headers: { 'x-app-pin': activePin } })
         .then(res => res.json())
-        .then((files: string[]) => setDownloadedFiles(new Set(files)))
+        .then((data: any) => {
+            // SAFETY CHECK: Ensure we have arrays before making Sets
+            const complete = Array.isArray(data?.complete) ? data.complete : [];
+            const partials = Array.isArray(data?.partials) ? data.partials : [];
+            setInventory({
+                complete: new Set(complete),
+                partials: new Set(partials)
+            });
+        })
         .catch(console.error);
     };
 
@@ -78,8 +93,8 @@ const App: React.FC = () => {
     fetchInventory();
 
     // Intervals
-    const downloadPoll = setInterval(fetchDownloads, 2000); // Poll active every 2s
-    const inventoryPoll = setInterval(fetchInventory, 10000); // Poll disk every 10s
+    const downloadPoll = setInterval(fetchDownloads, 2000); // Active downloads (fast)
+    const inventoryPoll = setInterval(fetchInventory, 10000); // Disk inventory (slow)
 
     return () => {
       clearInterval(downloadPoll);
@@ -256,7 +271,7 @@ const App: React.FC = () => {
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
   };
 
-  // --- SCAN ALL LOGIC (POLLING) ---
+  // --- SCAN ALL LOGIC ---
   const handleScanAll = async () => {
     if (loading) return;
     setLoading(true);
@@ -292,7 +307,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- CONNECTION TEST ---
   const handleTestConnection = async () => {
     if (isTesting) return;
     setIsTesting(true);
@@ -313,7 +327,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- FILTER ---
   const filteredItems = useMemo(() => {
     const calculateScore = (text: string, query: string, isPrimary: boolean, type: string) => {
       let score = 0;
@@ -384,15 +397,7 @@ const App: React.FC = () => {
           <div className="p-6 space-y-4">
              <div className="space-y-1">
                <label className="text-xs font-bold uppercase text-gray-400 tracking-wider ml-1">Application PIN</label>
-               <input 
-                 type="password" 
-                 value={pinInput} 
-                 onChange={(e) => { setPinInput(e.target.value); setAuthError(false); }} 
-                 onKeyDown={(e) => e.key === 'Enter' && !isLockedOut && handleUnlock()} 
-                 placeholder={isLockedOut ? `Locked: ${timeLeft}s` : "••••••••"} 
-                 autoFocus 
-                 disabled={isLockedOut}
-                 className={`w-full bg-gray-900 border rounded p-3 text-white placeholder:text-gray-700 focus:outline-none transition-colors text-center font-mono text-lg ${isLockedOut ? 'border-red-900 bg-red-900/10 text-red-400 cursor-not-allowed placeholder:text-red-500/50' : authError ? 'border-red-500 text-red-200' : 'border-gray-600 focus:border-plex-orange'}`} />
+               <input type="password" value={pinInput} onChange={(e) => { setPinInput(e.target.value); setAuthError(false); }} onKeyDown={(e) => e.key === 'Enter' && !isLockedOut && handleUnlock()} placeholder={isLockedOut ? `Locked: ${timeLeft}s` : "••••••••"} autoFocus disabled={isLockedOut} className={`w-full bg-gray-900 border rounded p-3 text-white placeholder:text-gray-700 focus:outline-none transition-colors text-center font-mono text-lg ${isLockedOut ? 'border-red-900 bg-red-900/10 text-red-400 cursor-not-allowed placeholder:text-red-500/50' : authError ? 'border-red-500 text-red-200' : 'border-gray-600 focus:border-plex-orange'}`} />
                {isLockedOut ? <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">Too many attempts. Wait {timeLeft}s.</p> : authError && <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">Access Denied {failedAttempts > 0 && `(${failedAttempts}/5)`}</p>}
              </div>
              <button onClick={handleUnlock} disabled={loading || !pinInput || isLockedOut} className={`w-full font-bold py-3 rounded shadow-lg transition-colors ${isLockedOut || !pinInput ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-plex-orange hover:bg-yellow-600 text-black'}`}>{isLockedOut ? 'Locked' : 'Unlock'}</button>
@@ -498,8 +503,14 @@ const App: React.FC = () => {
 
       <div className={`fixed inset-0 z-30 md:static md:w-[450px] bg-gray-800 transition-transform duration-300 ${selectedItem ? 'translate-x-0' : 'translate-x-full md:translate-x-0 md:hidden'}`}>
         {selectedItem ? (
-          // PASSING NEW PROPS DOWN
-          <MediaDetail item={selectedItem} onClose={handleCloseMedia} activeDownloads={activeDownloads} downloadedFiles={downloadedFiles} />
+          // Updated prop passing to match MediaDetail's new interface
+          <MediaDetail 
+            item={selectedItem} 
+            onClose={handleCloseMedia} 
+            activeDownloads={activeDownloads} 
+            completeFiles={inventory.complete}
+            partialFiles={inventory.partials}
+          />
         ) : (
           <div className="hidden md:flex items-center justify-center h-full text-gray-600">Select an item</div>
         )}

@@ -57,7 +57,6 @@ const db = new sqlite3.Database(DB_PATH, (err) => {
 });
 
 // --- GLOBAL SCAN STATUS ---
-// Used for polling UI updates
 let scanStatus = {
   isRunning: false,
   step: 'Idle', 
@@ -209,10 +208,7 @@ const performLocalScan = async () => {
 };
 
 const runFullScan = async (forcedOwner?: string) => {
-  if (scanStatus.isRunning) {
-    console.log("[Scanner] Skip: Scan already in progress.");
-    return;
-  }
+  if (scanStatus.isRunning) return;
 
   scanStatus = { isRunning: true, step: 'Initializing', localFiles: 0, newLocal: 0, remoteSummary: [], error: null };
   const owner = forcedOwner || HOST_USER;
@@ -220,7 +216,6 @@ const runFullScan = async (forcedOwner?: string) => {
   try {
     const countBefore = await getFileCount(HOST_USER);
 
-    // 1. Local Scan
     scanStatus.step = 'Scanning Local Disk...';
     if (owner === 'ALL' && !MASTER_URL) {
        const files = await performLocalScan();
@@ -233,7 +228,6 @@ const runFullScan = async (forcedOwner?: string) => {
        return;
     }
     
-    // 2. Perform Scan & Local Save
     const files = await performLocalScan();
     await replaceUserFiles(HOST_USER, files); 
     if (NODE_URL) await registerNode(HOST_USER, NODE_URL);
@@ -242,10 +236,8 @@ const runFullScan = async (forcedOwner?: string) => {
     scanStatus.localFiles = files.length;
     scanStatus.newLocal = Math.max(0, countAfter - countBefore);
 
-    // 3. Sync with Master
     if (MASTER_URL) { 
       scanStatus.step = 'Syncing with Master...';
-      
       try {
         const pushRes = await fetch(`${MASTER_URL}/api/sync`, {
           method: 'POST',
@@ -292,22 +284,41 @@ const ensureDir = (dirPath: string) => {
   }
 };
 
-// --- DOWNLOAD WORKER ---
+// --- QUEUE PROCESSOR ---
+const processQueue = async () => {
+  const downloadingCount = Array.from(activeDownloads.values())
+    .filter(d => d.status === 'downloading').length;
+  
+  if (downloadingCount >= MAX_CONCURRENT_DOWNLOADS) return;
+
+  const nextJob = Array.from(activeDownloads.values())
+    .filter(d => d.status === 'pending')
+    .sort((a, b) => a.startTime - b.startTime)[0]; 
+
+  if (!nextJob) return; 
+
+  downloadFile(nextJob.remoteUrl, nextJob.remotePath, nextJob.localPath, nextJob.id);
+};
+
+// --- DOWNLOAD WORKER (RESUMABLE) ---
 const downloadFile = async (remoteUrl: string, remotePath: string, localPath: string, jobId: string) => {
   if (!DOWNLOAD_ROOT) throw new Error("No Download Root configured.");
   
+  // 1. Check if FINAL file exists
   if (fs.existsSync(localPath)) {
     const job = activeDownloads.get(jobId);
     if (job) {
        const stats = fs.statSync(localPath);
        activeDownloads.set(jobId, { ...job, status: 'skipped', totalBytes: stats.size, downloadedBytes: stats.size, speed: 0 });
     }
+    processQueue();
     return;
   }
 
   const cleanBaseUrl = remoteUrl.replace(/\/$/, '');
   const encodedPath = encodeURIComponent(remotePath);
   const downloadUrl = `${cleanBaseUrl}/api/serve?path=${encodedPath}`;
+  const partPath = `${localPath}.part`;
 
   ensureDir(path.dirname(localPath));
   console.log(`[Download START] Job ${jobId} -> ${path.basename(localPath)}`);
@@ -320,44 +331,49 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
     activeDownloads.set(jobId, { ...currentStatus, status: 'downloading', abortController: controller });
   }
 
+  // 2. RESUME LOGIC: Check for partial file
+  let startByte = 0;
+  if (fs.existsSync(partPath)) {
+    startByte = fs.statSync(partPath).size;
+    console.log(`[Download RESUME] Resuming ${path.basename(localPath)} from byte ${startByte}`);
+  }
+
   return new Promise<void>((resolve, reject) => {
     const lib = downloadUrl.startsWith('https') ? https : http;
     const req = lib.get(downloadUrl, {
-      headers: { 'x-sync-secret': SYNC_SECRET || '' },
+      headers: { 
+        'x-sync-secret': SYNC_SECRET || '',
+        'Range': `bytes=${startByte}-` // Request only missing bytes
+      },
       signal: signal 
     }, (response) => {
-      if (response.statusCode !== 200) {
+      // Allow 200 (OK) or 206 (Partial Content)
+      if (response.statusCode !== 200 && response.statusCode !== 206) {
         const err = new Error(`Remote Node responded with ${response.statusCode}`);
         if (activeDownloads.has(jobId)) {
              activeDownloads.set(jobId, { ...activeDownloads.get(jobId)!, status: 'error', error: err.message });
         }
+        processQueue();
         reject(err);
         return;
       }
-      const contentType = response.headers['content-type'] || '';
-      if (contentType.includes('text/html')) {
-        const err = new Error("Remote node returned HTML. Check NODE_URL.");
-        if (activeDownloads.has(jobId)) {
-             activeDownloads.set(jobId, { ...activeDownloads.get(jobId)!, status: 'error', error: "Config Error: HTML Response" });
-        }
-        response.resume();
-        reject(err);
-        return;
-      }
-      const totalSize = parseInt(response.headers['content-length'] || '0', 10);
+
+      // Calculate total size based on Content-Length + what we already have
+      // Note: Content-Length in a 206 response is just the chunk size, not total file size
+      const contentLength = parseInt(response.headers['content-length'] || '0', 10);
+      const totalSize = startByte + contentLength;
+      
       if (activeDownloads.has(jobId)) {
         activeDownloads.get(jobId)!.totalBytes = totalSize;
+        activeDownloads.get(jobId)!.downloadedBytes = startByte; // Sync start
       }
-      if (totalSize === 0) {
-        fs.closeSync(fs.openSync(localPath, 'w'));
-        const job = activeDownloads.get(jobId);
-        if (job) activeDownloads.set(jobId, { ...job, status: 'completed', downloadedBytes: 0 });
-        resolve();
-        return;
-      }
-      const fileStream = fs.createWriteStream(localPath);
+
+      // Append if resuming, otherwise create new
+      const fileStream = fs.createWriteStream(partPath, { flags: startByte > 0 ? 'a' : 'w' });
+      
       let lastCheckTime = Date.now();
-      let lastCheckBytes = 0;
+      let lastCheckBytes = startByte;
+
       response.on('data', (chunk) => {
         const job = activeDownloads.get(jobId);
         if (job) {
@@ -373,21 +389,27 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
           activeDownloads.set(jobId, job);
         }
       });
+
       streamPipeline(response, fileStream)
         .then(() => {
+          // 3. Rename .part to final upon success
+          fs.renameSync(partPath, localPath);
           const job = activeDownloads.get(jobId);
           if (job) activeDownloads.set(jobId, { ...job, status: 'completed', speed: 0 });
+          processQueue();
           resolve();
         })
         .catch((err) => {
           if (err.code === 'ABORT_ERR') {
              console.log(`[Download] Job ${jobId} cancelled.`);
-             try { fs.unlinkSync(localPath); } catch(e) {}
+             // DO NOT DELETE .PART FILE ON CANCEL
+             processQueue();
              resolve();
           } else {
              const job = activeDownloads.get(jobId);
              const errMsg = err.code === 'ECONNRESET' ? 'Network Error (Reset)' : err.message;
              if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: errMsg });
+             processQueue();
              reject(err);
           }
         });
@@ -397,6 +419,7 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
         const job = activeDownloads.get(jobId);
         const errMsg = err.code === 'ECONNRESET' ? 'Network Error (Reset)' : err.message;
         if (job) activeDownloads.set(jobId, { ...job, status: 'error', error: errMsg });
+        processQueue(); 
         reject(err);
     });
   });
@@ -404,28 +427,37 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
 // --- ROUTES ---
 
-// NEW: Helper to get recursive filenames for inventory check
-const getRecursiveFilenames = (dir: string): string[] => {
-  let results: string[] = [];
-  if (!fs.existsSync(dir)) return results;
+// NEW: Helper for Inventory (Split Complete vs Partial)
+const getRecursiveFilenames = (dir: string): { complete: string[], partials: string[] } => {
+  let complete: string[] = [];
+  let partials: string[] = [];
+  
+  if (!fs.existsSync(dir)) return { complete, partials };
+  
   const list = fs.readdirSync(dir);
   list.forEach(file => {
     const filePath = path.join(dir, file);
     const stat = fs.statSync(filePath);
     if (stat && stat.isDirectory()) { 
-      results = results.concat(getRecursiveFilenames(filePath));
+      const sub = getRecursiveFilenames(filePath);
+      complete = complete.concat(sub.complete);
+      partials = partials.concat(sub.partials);
     } else { 
-      results.push(file); 
+      if (file.endsWith('.part')) {
+        partials.push(file.replace('.part', '')); // Store base name
+      } else {
+        complete.push(file);
+      }
     }
   });
-  return results;
+  return { complete, partials };
 };
 
-// NEW: Inventory Route
+// UPDATED Inventory Route
 app.get('/api/inventory', requirePin, (req, res) => {
   try {
-    const files = getRecursiveFilenames(DOWNLOAD_ROOT);
-    res.json(files);
+    const data = getRecursiveFilenames(DOWNLOAD_ROOT);
+    res.json(data);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -446,15 +478,15 @@ app.post('/api/download', generalLimiter, requirePin, async (req, res) => {
     return;
   }
   if (!owner) { res.status(400).json({ error: "Missing owner" }); return; }
+  
   db.get('SELECT url FROM nodes WHERE owner = ?', [owner], async (err, row: any) => {
     if (err || !row || !row.url) {
       res.status(404).json({ error: `No known URL for user ${owner}` });
       return;
     }
-    const queueIds: string[] = [];
+    
     newJobs.forEach(item => {
         const jobId = generateId();
-        queueIds.push(jobId);
         activeDownloads.set(jobId, {
             id: jobId,
             filename: item.filename,
@@ -469,16 +501,7 @@ app.post('/api/download', generalLimiter, requirePin, async (req, res) => {
         });
     });
     res.json({ success: true, message: `Queued ${newJobs.length} items...` });
-    for (let i = 0; i < newJobs.length; i++) {
-        const jobId = queueIds[i];
-        const job = activeDownloads.get(jobId);
-        if (!job || job.status === 'cancelled') continue;
-        try {
-            await downloadFile(job.remoteUrl, job.remotePath, job.localPath, jobId);
-        } catch (e) {
-            console.error(`[Download Loop] Error on item ${i}`, e);
-        }
-    }
+    processQueue();
   });
 });
 
@@ -488,6 +511,7 @@ app.post('/api/download/cancel', requirePin, (req, res) => {
   if (job) {
     if (job.abortController) { job.abortController.abort(); }
     activeDownloads.set(id, { ...job, status: 'cancelled', speed: 0 });
+    processQueue();
     res.json({ success: true, message: "Cancelled" });
   } else {
     res.status(404).json({ error: "Job not found" });
@@ -499,13 +523,9 @@ app.post('/api/download/retry', requirePin, async (req, res) => {
   const job = activeDownloads.get(id);
   if (!job) { return res.status(404).json({ error: "Job not found" }); }
   if (job.status === 'downloading') { return res.status(400).json({ error: "Already downloading" }); }
-  activeDownloads.set(id, { ...job, status: 'pending', error: undefined, speed: 0 });
+  activeDownloads.set(id, { ...job, status: 'pending', error: undefined, speed: 0, startTime: Date.now() });
   res.json({ success: true, message: "Re-queued..." });
-  try {
-     await downloadFile(job.remoteUrl, job.remotePath, job.localPath, id);
-  } catch(e) {
-     console.error("Retry failed", e);
-  }
+  processQueue();
 });
 
 app.post('/api/downloads/clear', requirePin, (req, res) => {
@@ -523,72 +543,70 @@ app.get('/api/downloads', requirePin, (req, res) => {
 });
 
 app.get('/api/config', (req, res) => {
-  res.json({ 
-    users: ALLOWED_USERS, 
-    requiresPin: !!APP_PIN,
-    hostUser: HOST_USER,
-    canDownload: fs.existsSync(DOWNLOAD_ROOT)
-  });
+  res.json({ users: ALLOWED_USERS, requiresPin: !!APP_PIN, hostUser: HOST_USER, canDownload: fs.existsSync(DOWNLOAD_ROOT) });
 });
 
+// UPDATED: Support Range Requests for Resume
 app.get('/api/serve', mediaLimiter, requireSecret, (req, res) => {
   const requestPath = req.query.path as string;
   if (!requestPath) { res.status(400).send('Missing path'); return; }
   const absolutePath = path.resolve(requestPath); 
   const allowedRoot = path.resolve(MEDIA_ROOT);
-  const isAllowed = absolutePath.startsWith(allowedRoot);
-  if (!isAllowed || !fs.existsSync(absolutePath)) {
+  
+  if (!absolutePath.startsWith(allowedRoot) || !fs.existsSync(absolutePath)) {
     res.status(404).send('File not found or Access Denied');
     return;
   }
+
   const stat = fs.statSync(absolutePath);
-  const head = { 'Content-Length': stat.size, 'Content-Type': 'application/octet-stream' };
-  res.writeHead(200, head);
-  fs.createReadStream(absolutePath).pipe(res);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = (end - start) + 1;
+    const file = fs.createReadStream(absolutePath, { start, end });
+    const head = {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': 'application/octet-stream',
+    };
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = { 'Content-Length': fileSize, 'Content-Type': 'application/octet-stream' };
+    res.writeHead(200, head);
+    fs.createReadStream(absolutePath).pipe(res);
+  }
 });
 
-// --- CONNECTION TESTING ROUTES ---
-
+// --- CONNECTION TEST ---
 app.get('/api/ping', requireSecret, (req, res) => {
   res.json({ success: true, message: 'Pong', role: MASTER_URL ? 'Satellite' : 'Master' });
 });
 
 app.post('/api/test-connection', generalLimiter, requirePin, async (req, res) => {
-  if (!MASTER_URL) {
-    return res.json({ success: true, message: "Running in Master/Local Mode (No Master URL set)" });
-  }
+  if (!MASTER_URL) return res.json({ success: true, message: "Running in Master/Local Mode" });
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5000); 
-    const response = await fetch(`${MASTER_URL}/api/ping`, {
-      headers: { 'x-sync-secret': SYNC_SECRET || '' },
-      signal: controller.signal
-    });
+    const response = await fetch(`${MASTER_URL}/api/ping`, { headers: { 'x-sync-secret': SYNC_SECRET || '' }, signal: controller.signal });
     clearTimeout(timeout);
-    if (response.ok) {
-      res.json({ success: true, message: "Connected to Master successfully." });
-    } else if (response.status === 401 || response.status === 403) {
-      res.status(401).json({ success: false, message: "Authentication Failed: Check SYNC_SECRET." });
-    } else if (response.status === 404) {
-      res.status(404).json({ success: false, message: "Server found, but API missing. Check MASTER_URL." });
-    } else {
-      res.status(500).json({ success: false, message: `Master returned status ${response.status}` });
-    }
+    if (response.ok) res.json({ success: true, message: "Connected to Master successfully." });
+    else res.status(response.status).json({ success: false, message: `Master returned status ${response.status}` });
   } catch (err: any) {
-    const msg = err.name === 'AbortError' ? 'Connection Timed Out (5s)' : (err.message || 'Network Error');
-    res.status(500).json({ success: false, message: `Connection Failed: ${msg}` });
+    res.status(500).json({ success: false, message: `Connection Failed` });
   }
 });
 
-// --- SCANNING (Async/Poll) ---
-app.get('/api/scan-status', requirePin, (req, res) => {
-  res.json(scanStatus);
-});
+// --- SCANNING ---
+app.get('/api/scan-status', requirePin, (req, res) => res.json(scanStatus));
 
 app.post('/api/scan', scanLimiter, requirePin, (req, res) => {
   if (scanStatus.isRunning) return res.status(409).json({ error: "Scan already in progress." });
-  
-  // Fire and forget
   res.json({ success: true, message: "Scan started in background." });
   runFullScan(req.body.owner);
 });
@@ -600,39 +618,23 @@ app.post('/api/sync', generalLimiter, requireSecret, async (req, res) => {
   try {
     await replaceUserFiles(owner, files);
     if (url) await registerNode(owner, url); 
-    console.log(`[API] Received ${files.length} files from ${owner}`);
     res.json({ success: true });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/files', requirePin, (req, res) => {
-  const query = `
-    SELECT m.*, n.url as remote_url 
-    FROM media_files m 
-    LEFT JOIN nodes n ON m.owner = n.owner 
-    ORDER BY m.filename ASC
-  `;
+  const query = `SELECT m.*, n.url as remote_url FROM media_files m LEFT JOIN nodes n ON m.owner = n.owner ORDER BY m.filename ASC`;
   db.all(query, (err, rows: any[]) => {
     if (err) { res.status(500).json({ error: err.message }); return; }
     const files = rows.map(r => ({ ...r, rawFilename: r.filename, sizeBytes: r.size_bytes, lastModified: r.last_modified, remoteUrl: r.remote_url }));
-    db.all('SELECT * FROM nodes', (err2, nodes) => {
-       res.json({ files, nodes: nodes || [] });
-    });
+    db.all('SELECT * FROM nodes', (err2, nodes) => { res.json({ files, nodes: nodes || [] }); });
   });
 });
 
-// ----------------------------------------
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../dist', 'index.html')));
 
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../dist', 'index.html'));
-});
-
-// --- CRON ---
 setTimeout(() => runFullScan(), 5000); 
-if (cron.validate(CRON_SCHEDULE)) {
-  cron.schedule(CRON_SCHEDULE, () => runFullScan());
-}
+if (cron.validate(CRON_SCHEDULE)) { cron.schedule(CRON_SCHEDULE, () => runFullScan()); }
 
-// --- SERVER START ---
 const server = app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 Server running on ${PORT}`));
 server.setTimeout(0);
