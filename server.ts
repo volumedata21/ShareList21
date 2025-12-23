@@ -554,7 +554,6 @@ app.get('/api/downloads', requirePin, (req, res) => {
         }
 
         // Rule 3: If both are Finished (History), sort by Newest First
-        // This keeps the most recently finished items at the top of the "History" section
         return b.startTime - a.startTime;
     });
   res.json(downloads);
