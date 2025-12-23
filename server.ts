@@ -538,7 +538,25 @@ app.post('/api/downloads/clear', requirePin, (req, res) => {
 app.get('/api/downloads', requirePin, (req, res) => {
   const downloads = Array.from(activeDownloads.values())
     .map(({ abortController, ...rest }) => rest)
-    .sort((a,b) => b.startTime - a.startTime);
+    .sort((a, b) => {
+        // Helper: Is the job "Active" (Queued or Running)?
+        const isActiveA = ['pending', 'downloading'].includes(a.status);
+        const isActiveB = ['pending', 'downloading'].includes(b.status);
+
+        // Rule 1: Active jobs always float to the TOP
+        if (isActiveA && !isActiveB) return -1; // A comes first
+        if (!isActiveA && isActiveB) return 1;  // B comes first
+
+        // Rule 2: If both are Active, sort by Oldest First (FIFO Queue)
+        // This ensures the one currently downloading (started first) is at the very top
+        if (isActiveA && isActiveB) {
+            return a.startTime - b.startTime;
+        }
+
+        // Rule 3: If both are Finished (History), sort by Newest First
+        // This keeps the most recently finished items at the top of the "History" section
+        return b.startTime - a.startTime;
+    });
   res.json(downloads);
 });
 
