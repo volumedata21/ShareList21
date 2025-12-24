@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, MediaFile, AppConfig } from '../types';
 import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
-// --- PROPS ---
 interface MediaDetailProps {
   item: MediaItem;
   onClose: () => void;
@@ -44,8 +43,8 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
   item, 
   onClose, 
   activeDownloads = [], 
-  completeFiles = new Set(), // SAFETY: Default to empty Set
-  partialFiles = new Set()   // SAFETY: Default to empty Set
+  completeFiles = new Set(), 
+  partialFiles = new Set() 
 }) => {
   const [loadedFiles, setLoadedFiles] = useState<ProcessedFile[]>([]);
   const [copiedState, setCopiedState] = useState<string | null>(null);
@@ -104,12 +103,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
 
   const handleBatchDownload = async (files: ProcessedFile[]) => {
     const pin = sessionStorage.getItem('pf_pin') || '';
-    
-    // Resume Logic for Batch: Include partials, exclude complete
-    const filesToDownload = files.filter(f => 
-        f.owner !== currentUser && 
-        !completeFiles.has(f.rawFilename)
-    );
+    const filesToDownload = files.filter(f => f.owner !== currentUser && !completeFiles.has(f.rawFilename));
     
     if (filesToDownload.length === 0) {
         alert("All files in this set are already downloaded.");
@@ -245,9 +239,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
   };
 
   const renderFileCard = (file: ProcessedFile) => {
-    // 1. Is it newly clicked?
     const isJustClicked = downloadingIds.has(file.path);
-    // 2. Is it currently downloading? (Poll)
     const activeDownload = activeDownloads.find(d => 
         (d.remotePath && d.remotePath === file.path) || 
         (d.filename.includes(file.rawFilename))
@@ -263,7 +255,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
         }
     }
 
-    // 3. Status Checks
     const isCompleted = !isDownloading && completeFiles.has(file.rawFilename);
     const isPartial = !isDownloading && !isCompleted && partialFiles.has(file.rawFilename);
 
@@ -365,9 +356,16 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
 
             {file.is4K && !file.isRemux && <span className="text-xs font-bold px-2 py-0.5 rounded bg-plex-orange text-black border border-plex-orange">4K UHD</span>}
             
-            {file.is3D && <span className="text-xs font-bold px-2 py-0.5 rounded border border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]">{file.is3D}</span>}
+            {file.is3D && (
+              <span className="text-xs font-bold px-2 py-0.5 rounded border border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]">
+                {file.is3D}
+              </span>
+            )}
             
-            {file.quality && !is4KQualityString(file.quality) && file.quality.trim() !== '' && (
+            {file.quality && 
+             !is4KQualityString(file.quality) && 
+             file.quality.trim() !== '' && 
+             file.quality.toLowerCase() !== '3d' && (
                 <span className={`text-xs font-bold px-2 py-0.5 rounded border 
                     ${file.quality.toUpperCase() === 'FLAC' 
                         ? 'border-yellow-500 text-yellow-400 bg-yellow-900/40 shadow-[0_0_8px_rgba(234,179,8,0.3)]' 
@@ -394,7 +392,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
     );
   };
 
-  // --- MUSIC RENDER ---
   if (item.type === 'Music') {
     const albums: Record<string, ProcessedFile[]> = {};
     displayedFiles.forEach(f => {
@@ -432,7 +429,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
 
            {Object.keys(albums).sort().map(albumName => {
              const albumFiles = albums[albumName];
-             // Filter complete files out of "Download All" for albums too
              const downloadableFiles = albumFiles.filter(f => f.owner !== currentUser && !completeFiles.has(f.rawFilename));
              const hasDownloads = canDownload && downloadableFiles.length > 0;
 
@@ -456,14 +452,11 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
 
                  <div className="space-y-2">
                    {albumFiles.map(file => {
-                       // 1. Downloading?
                        const activeDownload = activeDownloads.find(d => 
                            (d.remotePath && d.remotePath === file.path) || 
                            (d.filename.includes(file.rawFilename))
                        );
                        const isDownloading = downloadingIds.has(file.path) || (activeDownload && (activeDownload.status === 'downloading' || activeDownload.status === 'pending'));
-                       
-                       // 2. Status
                        const isCompleted = !isDownloading && completeFiles.has(file.rawFilename);
                        const isPartial = !isDownloading && !isCompleted && partialFiles.has(file.rawFilename);
 
@@ -522,7 +515,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
     );
   }
 
-  // --- STANDARD / TV SHOW RENDER ---
   return (
     <div className="h-full flex flex-col bg-gray-800 border-l border-gray-700 shadow-2xl overflow-y-auto">
       {/* Header */}
@@ -576,8 +568,6 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
                      const files = groupedSeasons[seasonNum];
                      const seasonTitle = seasonNum === 0 ? 'Specials' : `Season ${seasonNum}`;
                      
-                     // Filter out COMPLETE files from the "Download Season" button
-                     // Include PARTIAL files so they can be resumed in batch
                      const downloadableFiles = files.filter(f => f.owner !== currentUser && !completeFiles.has(f.rawFilename));
                      const hasDownloads = canDownload && downloadableFiles.length > 0;
 
