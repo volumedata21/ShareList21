@@ -208,7 +208,10 @@ const performLocalScan = async () => {
 };
 
 const runFullScan = async (forcedOwner?: string) => {
-  if (scanStatus.isRunning) return;
+  if (scanStatus.isRunning) {
+    console.log("[Scanner] Skip: Scan already in progress.");
+    return;
+  }
 
   scanStatus = { isRunning: true, step: 'Initializing', localFiles: 0, newLocal: 0, remoteSummary: [], error: null };
   const owner = forcedOwner || HOST_USER;
@@ -216,6 +219,7 @@ const runFullScan = async (forcedOwner?: string) => {
   try {
     const countBefore = await getFileCount(HOST_USER);
 
+    // 1. Local Scan
     scanStatus.step = 'Scanning Local Disk...';
     if (owner === 'ALL' && !MASTER_URL) {
        const files = await performLocalScan();
@@ -228,6 +232,7 @@ const runFullScan = async (forcedOwner?: string) => {
        return;
     }
     
+    // 2. Perform Scan & Local Save
     const files = await performLocalScan();
     await replaceUserFiles(HOST_USER, files); 
     if (NODE_URL) await registerNode(HOST_USER, NODE_URL);
@@ -236,8 +241,10 @@ const runFullScan = async (forcedOwner?: string) => {
     scanStatus.localFiles = files.length;
     scanStatus.newLocal = Math.max(0, countAfter - countBefore);
 
+    // 3. Sync with Master
     if (MASTER_URL) { 
       scanStatus.step = 'Syncing with Master...';
+      
       try {
         const pushRes = await fetch(`${MASTER_URL}/api/sync`, {
           method: 'POST',
@@ -284,6 +291,44 @@ const ensureDir = (dirPath: string) => {
   }
 };
 
+// --- ROUTES ---
+
+// Helper for Inventory (Split Complete vs Partial)
+const getRecursiveFilenames = (dir: string): { complete: string[], partials: string[] } => {
+  let complete: string[] = [];
+  let partials: string[] = [];
+  
+  if (!fs.existsSync(dir)) return { complete, partials };
+  
+  const list = fs.readdirSync(dir);
+  list.forEach(file => {
+    const filePath = path.join(dir, file);
+    const stat = fs.statSync(filePath);
+    if (stat && stat.isDirectory()) { 
+      const sub = getRecursiveFilenames(filePath);
+      complete = complete.concat(sub.complete);
+      partials = partials.concat(sub.partials);
+    } else { 
+      if (file.endsWith('.part')) {
+        partials.push(file.replace('.part', '')); // Store base name
+      } else {
+        complete.push(file);
+      }
+    }
+  });
+  return { complete, partials };
+};
+
+// Inventory Route
+app.get('/api/inventory', requirePin, (req, res) => {
+  try {
+    const data = getRecursiveFilenames(DOWNLOAD_ROOT);
+    res.json(data);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- QUEUE PROCESSOR ---
 const processQueue = async () => {
   const downloadingCount = Array.from(activeDownloads.values())
@@ -300,10 +345,12 @@ const processQueue = async () => {
   downloadFile(nextJob.remoteUrl, nextJob.remotePath, nextJob.localPath, nextJob.id);
 };
 
-// --- DOWNLOAD WORKER (RESUMABLE) ---
+// --- DOWNLOAD WORKER (RESUMABLE + MEMORY SAFE) ---
 const downloadFile = async (remoteUrl: string, remotePath: string, localPath: string, jobId: string) => {
   if (!DOWNLOAD_ROOT) throw new Error("No Download Root configured.");
   
+  const partPath = `${localPath}.part`;
+
   // 1. Check if FINAL file exists
   if (fs.existsSync(localPath)) {
     const job = activeDownloads.get(jobId);
@@ -318,7 +365,6 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
   const cleanBaseUrl = remoteUrl.replace(/\/$/, '');
   const encodedPath = encodeURIComponent(remotePath);
   const downloadUrl = `${cleanBaseUrl}/api/serve?path=${encodedPath}`;
-  const partPath = `${localPath}.part`;
 
   ensureDir(path.dirname(localPath));
   console.log(`[Download START] Job ${jobId} -> ${path.basename(localPath)}`);
@@ -359,39 +405,45 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
       }
 
       // Calculate total size based on Content-Length + what we already have
-      // Note: Content-Length in a 206 response is just the chunk size, not total file size
       const contentLength = parseInt(response.headers['content-length'] || '0', 10);
       const totalSize = startByte + contentLength;
       
       if (activeDownloads.has(jobId)) {
         activeDownloads.get(jobId)!.totalBytes = totalSize;
-        activeDownloads.get(jobId)!.downloadedBytes = startByte; // Sync start
+        activeDownloads.get(jobId)!.downloadedBytes = startByte; 
       }
 
       // Append if resuming, otherwise create new
       const fileStream = fs.createWriteStream(partPath, { flags: startByte > 0 ? 'a' : 'w' });
       
+      // PASSIVE PROGRESS TRACKING (No 'data' listener to prevent backpressure)
       let lastCheckTime = Date.now();
-      let lastCheckBytes = startByte;
+      let lastCheckBytes = 0;
 
-      response.on('data', (chunk) => {
-        const job = activeDownloads.get(jobId);
-        if (job) {
-          job.downloadedBytes += chunk.length;
-          const now = Date.now();
-          if (now - lastCheckTime > 1000) {
-            const bytesDiff = job.downloadedBytes - lastCheckBytes;
-            const timeDiff = (now - lastCheckTime) / 1000;
+      const progressInterval = setInterval(() => {
+         const job = activeDownloads.get(jobId);
+         if (!job) { clearInterval(progressInterval); return; }
+
+         const sessionBytes = fileStream.bytesWritten;
+         const currentTotal = startByte + sessionBytes;
+
+         const now = Date.now();
+         const timeDiff = (now - lastCheckTime) / 1000;
+         
+         if (timeDiff >= 1) {
+            const bytesDiff = sessionBytes - lastCheckBytes;
             job.speed = Math.floor(bytesDiff / timeDiff);
+            job.downloadedBytes = currentTotal;
+            activeDownloads.set(jobId, job);
+            
             lastCheckTime = now;
-            lastCheckBytes = job.downloadedBytes;
-          }
-          activeDownloads.set(jobId, job);
-        }
-      });
+            lastCheckBytes = sessionBytes;
+         }
+      }, 1000);
 
       streamPipeline(response, fileStream)
         .then(() => {
+          clearInterval(progressInterval);
           // 3. Rename .part to final upon success
           fs.renameSync(partPath, localPath);
           const job = activeDownloads.get(jobId);
@@ -400,6 +452,7 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
           resolve();
         })
         .catch((err) => {
+          clearInterval(progressInterval);
           if (err.code === 'ABORT_ERR') {
              console.log(`[Download] Job ${jobId} cancelled.`);
              // DO NOT DELETE .PART FILE ON CANCEL
@@ -414,6 +467,9 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
           }
         });
     });
+
+    req.setTimeout(0); // No timeout for large files
+
     req.on('error', (err: any) => {
         if (err.name === 'AbortError') return; 
         const job = activeDownloads.get(jobId);
@@ -427,45 +483,10 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 
 // --- ROUTES ---
 
-// NEW: Helper for Inventory (Split Complete vs Partial)
-const getRecursiveFilenames = (dir: string): { complete: string[], partials: string[] } => {
-  let complete: string[] = [];
-  let partials: string[] = [];
-  
-  if (!fs.existsSync(dir)) return { complete, partials };
-  
-  const list = fs.readdirSync(dir);
-  list.forEach(file => {
-    const filePath = path.join(dir, file);
-    const stat = fs.statSync(filePath);
-    if (stat && stat.isDirectory()) { 
-      const sub = getRecursiveFilenames(filePath);
-      complete = complete.concat(sub.complete);
-      partials = partials.concat(sub.partials);
-    } else { 
-      if (file.endsWith('.part')) {
-        partials.push(file.replace('.part', '')); // Store base name
-      } else {
-        complete.push(file);
-      }
-    }
-  });
-  return { complete, partials };
-};
-
-// UPDATED Inventory Route
-app.get('/api/inventory', requirePin, (req, res) => {
-  try {
-    const data = getRecursiveFilenames(DOWNLOAD_ROOT);
-    res.json(data);
-  } catch (e: any) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 app.post('/api/download', generalLimiter, requirePin, async (req, res) => {
   const { path: singlePath, filename: singleFilename, files, owner, folderName } = req.body;
   let newJobs: { remotePath: string, filename: string }[] = [];
+  
   if (files && Array.isArray(files)) {
     newJobs = files.map((f: any) => ({
       remotePath: f.path,
@@ -477,6 +498,7 @@ app.post('/api/download', generalLimiter, requirePin, async (req, res) => {
     res.status(400).json({ error: "Missing parameters" });
     return;
   }
+  
   if (!owner) { res.status(400).json({ error: "Missing owner" }); return; }
   
   db.get('SELECT url FROM nodes WHERE owner = ?', [owner], async (err, row: any) => {
@@ -485,6 +507,7 @@ app.post('/api/download', generalLimiter, requirePin, async (req, res) => {
       return;
     }
     
+    // Add all to queue
     newJobs.forEach(item => {
         const jobId = generateId();
         activeDownloads.set(jobId, {
@@ -500,6 +523,7 @@ app.post('/api/download', generalLimiter, requirePin, async (req, res) => {
             speed: 0
         });
     });
+
     res.json({ success: true, message: `Queued ${newJobs.length} items...` });
     processQueue();
   });
@@ -535,41 +559,41 @@ app.post('/api/downloads/clear', requirePin, (req, res) => {
   res.json({ success: true });
 });
 
+// SMART SORT: Active (Oldest First) -> Finished (Newest First)
 app.get('/api/downloads', requirePin, (req, res) => {
   const downloads = Array.from(activeDownloads.values())
     .map(({ abortController, ...rest }) => rest)
     .sort((a, b) => {
-        // Helper: Is the job "Active" (Queued or Running)?
         const isActiveA = ['pending', 'downloading'].includes(a.status);
         const isActiveB = ['pending', 'downloading'].includes(b.status);
 
-        // Rule 1: Active jobs always float to the TOP
-        if (isActiveA && !isActiveB) return -1; // A comes first
-        if (!isActiveA && isActiveB) return 1;  // B comes first
+        // Active floats to top
+        if (isActiveA && !isActiveB) return -1;
+        if (!isActiveA && isActiveB) return 1;
 
-        // Rule 2: If both are Active, sort by Oldest First (FIFO Queue)
-        // This ensures the one currently downloading (started first) is at the very top
-        if (isActiveA && isActiveB) {
-            return a.startTime - b.startTime;
-        }
+        // If both Active -> Oldest First (FIFO)
+        if (isActiveA && isActiveB) return a.startTime - b.startTime;
 
-        // Rule 3: If both are Finished (History), sort by Newest First
+        // If both Finished -> Newest First (History)
         return b.startTime - a.startTime;
     });
   res.json(downloads);
 });
 
 app.get('/api/config', (req, res) => {
-  res.json({ users: ALLOWED_USERS, requiresPin: !!APP_PIN, hostUser: HOST_USER, canDownload: fs.existsSync(DOWNLOAD_ROOT) });
+  res.json({ 
+    users: ALLOWED_USERS, 
+    requiresPin: !!APP_PIN,
+    hostUser: HOST_USER,
+    canDownload: fs.existsSync(DOWNLOAD_ROOT)
+  });
 });
 
-// UPDATED: Support Range Requests for Resume
 app.get('/api/serve', mediaLimiter, requireSecret, (req, res) => {
   const requestPath = req.query.path as string;
   if (!requestPath) { res.status(400).send('Missing path'); return; }
   const absolutePath = path.resolve(requestPath); 
   const allowedRoot = path.resolve(MEDIA_ROOT);
-  
   if (!absolutePath.startsWith(allowedRoot) || !fs.existsSync(absolutePath)) {
     res.status(404).send('File not found or Access Denied');
     return;
