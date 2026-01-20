@@ -628,9 +628,6 @@ app.post('/api/scan', requirePin, (req, res) => {
         const d = await r.json();
         if (d.files) await updateExternalCache(d.files, d.nodes);
         globalScanStatus.remoteSummary.push("Sync completed");
-      } else {
-        // Standalone Mode: Local DB Update
-        await replaceUserFiles(HOST_USER, files);
       }
       
       globalScanStatus.step = 'Complete';
