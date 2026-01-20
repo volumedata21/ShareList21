@@ -83,6 +83,7 @@ const registerNode = (owner: string, url: string) => {
   stmt.run(owner, url);
 };
 
+// --- FIX: This function was broken in your snippet ---
 const replaceUserFiles = (owner: string, files: MediaFile[]) => {
   const deleteStmt = db.prepare('DELETE FROM media_files WHERE owner = ?');
   const insertStmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -608,6 +609,9 @@ app.post('/api/scan', requirePin, (req, res) => {
       // Database Update
       globalScanStatus.step = 'Updating Database...';
       
+      // --- ALWAYS SAVE LOCAL FILES FIRST ---
+      await replaceUserFiles(HOST_USER, files);
+
       if (MASTER_URL) {
         // Satellite Mode: Sync to Master
         globalScanStatus.step = 'Syncing to Master...';
@@ -616,10 +620,19 @@ app.post('/api/scan', requirePin, (req, res) => {
         const CHUNK_SIZE = 500;
         for (let i = 0; i < files.length; i += CHUNK_SIZE) {
            const chunk = files.slice(i, i + CHUNK_SIZE);
+           
+           // --- FIX: ADD RESET FLAG FOR FIRST CHUNK ---
+           const isFirstChunk = (i === 0); 
+           
            await fetch(`${MASTER_URL}/api/sync`, { 
               method: 'POST', 
               headers: {'Content-Type':'application/json','x-sync-secret':SYNC_SECRET||''}, 
-              body: JSON.stringify({owner:HOST_USER, url:NODE_URL, files: chunk})
+              body: JSON.stringify({
+                  owner: HOST_USER, 
+                  url: NODE_URL, 
+                  files: chunk,
+                  reset: isFirstChunk // <--- Allows host to wipe old data
+              })
            });
         }
         
@@ -694,6 +707,55 @@ cron.schedule('0 * * * *', () => {
     }
   }
   if (removed > 0) console.log(`[GC] Removed ${removed} old download jobs.`);
+});
+
+// --- SYNC ENDPOINT ---
+app.post('/api/sync', requireSecret, (req, res) => {
+  const { owner, url, files, reset } = req.body;
+  if (!owner || !Array.isArray(files)) return res.status(400).json({ error: "Invalid data" });
+
+  // 1. Register/Update Node URL
+  if (url) registerNode(owner, url);
+
+  // 2. Prepare Statements
+  // Note: We use the same ID format as local files (owner:path)
+  const insertStmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  
+  const transaction = db.transaction(() => {
+    // 3. IF this is the first chunk, wipe the user's old data so we don't have duplicates
+    if (reset) {
+       db.prepare('DELETE FROM media_files WHERE owner = ?').run(owner);
+    }
+    
+    // 4. Insert the new files
+    for (const f of files) {
+       // Protect against bad data
+       if (!f.path || !f.rawFilename) continue;
+
+       try {
+         insertStmt.run(
+            `${owner}:${f.path}`, // ID
+            owner,
+            f.rawFilename,
+            f.path,
+            f.library || 'Unknown',
+            f.quality || '',
+            f.sizeBytes || 0,
+            f.lastModified || 0
+         );
+       } catch(e) { 
+         // Ignore duplicates in case of retry
+       }
+    }
+  });
+
+  try {
+    transaction();
+    res.json({ success: true, count: files.length });
+  } catch (e: any) {
+    console.error("Sync error:", e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 running on ${PORT}`));
