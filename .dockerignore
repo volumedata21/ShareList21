@@ -29,3 +29,6 @@ data_client/
 
 downloads_host
 downloads_client
+
+compose.dev.client.yaml
+compose.dev.yaml

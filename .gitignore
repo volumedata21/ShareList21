@@ -32,6 +32,7 @@ downloads_host/
 
 # Client Dev Environment
 compose.dev.client.yaml
+compose.dev.yaml
 media_client_example/
 data_client/
 downloads_client/

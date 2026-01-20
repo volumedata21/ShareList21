@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
-import pkg from 'sqlite3';
+import Database from 'better-sqlite3';
 import cors from 'cors';
 import cron from 'node-cron';
 import fs from 'fs';
@@ -14,8 +14,6 @@ import { promisify } from 'util';
 import rateLimit from 'express-rate-limit';
 
 const streamPipeline = promisify(pipeline);
-const { verbose } = pkg;
-const sqlite3 = verbose();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,10 +43,9 @@ if (DOWNLOAD_ROOT && !fs.existsSync(DOWNLOAD_ROOT)) {
   try { fs.mkdirSync(DOWNLOAD_ROOT); } catch (e) { console.warn("Could not create download root:", e); }
 }
 
-const db = new sqlite3.Database(DB_PATH, (err) => {
-  if (err) console.error("Database error:", err.message);
-  else console.log(`Connected to DB. User: ${HOST_USER}`);
-});
+const db = new Database(DB_PATH, { verbose: console.log });
+db.pragma('journal_mode = WAL');
+console.log(`Connected to DB. User: ${HOST_USER}`);
 
 // --- STATE ---
 interface DownloadStatus {
@@ -71,50 +68,82 @@ const generateId = () => Math.random().toString(36).substring(2, 9);
 
 // --- DB HELPERS ---
 const registerNode = (owner: string, url: string) => {
-  return new Promise<void>((resolve, reject) => {
-    db.run(`INSERT INTO nodes (owner, url) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET url=excluded.url`, [owner, url], (err) => err ? reject(err) : resolve());
-  });
+  const stmt = db.prepare(`INSERT INTO nodes (owner, url) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET url=excluded.url`);
+  stmt.run(owner, url);
 };
 
 const replaceUserFiles = (owner: string, files: MediaFile[]) => {
-  return new Promise<void>((resolve, reject) => {
-    db.serialize(() => {
-      db.run('BEGIN TRANSACTION');
-      db.run('DELETE FROM media_files WHERE owner = ?', [owner]);
-      const stmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-      try {
-        files.forEach(f => stmt.run(`${owner}:${f.path}`, owner, f.rawFilename, f.path, f.library, f.quality, f.sizeBytes, f.lastModified));
-        stmt.finalize();
-        db.run('COMMIT', () => resolve());
-      } catch (err) { db.run('ROLLBACK'); reject(err); }
-    });
+  // 1. Prepare the SQL statements once
+  const deleteStmt = db.prepare('DELETE FROM media_files WHERE owner = ?');
+  const insertStmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+
+  // 2. Create a "Transaction" (a group of actions that run together)
+  const transaction = db.transaction((filesToInsert: MediaFile[]) => {
+    deleteStmt.run(owner); // Delete old files
+    for (const f of filesToInsert) {
+      // Insert new file
+      insertStmt.run(
+        `${owner}:${f.path}`, 
+        owner, 
+        f.rawFilename, 
+        f.path, 
+        f.library, 
+        f.quality, 
+        f.sizeBytes, 
+        f.lastModified
+      );
+    }
   });
+
+  // 3. Run it
+  transaction(files);
 };
 
 const updateExternalCache = (files: MediaFile[], nodes: {owner:string, url:string}[]) => {
-  return new Promise<void>((resolve, reject) => {
-    db.serialize(() => {
-      db.run('BEGIN TRANSACTION');
-      const nodeStmt = db.prepare(`INSERT INTO nodes (owner, url) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET url=excluded.url`);
-      nodes.forEach(n => nodeStmt.run(n.owner, n.url));
-      nodeStmt.finalize();
-      db.run('DELETE FROM media_files WHERE owner != ?', [HOST_USER]);
-      const fileStmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-      try {
-        files.forEach(f => { if (f.owner !== HOST_USER) fileStmt.run(`${f.owner}:${f.path}`, f.owner, f.rawFilename, f.path, f.library, f.quality, f.sizeBytes, f.lastModified); });
-        fileStmt.finalize();
-        db.run('COMMIT', () => resolve());
-      } catch (err) { db.run('ROLLBACK'); reject(err); }
-    });
+  const nodeStmt = db.prepare(`INSERT INTO nodes (owner, url) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET url=excluded.url`);
+  const deleteStmt = db.prepare('DELETE FROM media_files WHERE owner != ?');
+  const fileStmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+
+  const transaction = db.transaction(() => {
+    // Update Nodes
+    for (const n of nodes) {
+      nodeStmt.run(n.owner, n.url);
+    }
+    
+    // Clear old cache (everything except your own files)
+    deleteStmt.run(HOST_USER);
+
+    // Insert new files
+    for (const f of files) {
+      if (f.owner !== HOST_USER) {
+        fileStmt.run(
+          `${f.owner}:${f.path}`, 
+          f.owner, 
+          f.rawFilename, 
+          f.path, 
+          f.library, 
+          f.quality, 
+          f.sizeBytes, 
+          f.lastModified
+        );
+      }
+    }
   });
+
+  transaction();
 };
 
-db.serialize(() => {
-  db.run("PRAGMA journal_mode = WAL;");
-  db.run(`CREATE TABLE IF NOT EXISTS media_files (id TEXT PRIMARY KEY, owner TEXT, filename TEXT, path TEXT, library TEXT, quality TEXT, size_bytes INTEGER, last_modified INTEGER)`);
-  db.run(`CREATE TABLE IF NOT EXISTS nodes (owner TEXT PRIMARY KEY, url TEXT)`);
-  if (NODE_URL) registerNode(HOST_USER, NODE_URL);
-});
+try {
+  // Create tables immediately
+  db.exec(`CREATE TABLE IF NOT EXISTS media_files (id TEXT PRIMARY KEY, owner TEXT, filename TEXT, path TEXT, library TEXT, quality TEXT, size_bytes INTEGER, last_modified INTEGER)`);
+  db.exec(`CREATE TABLE IF NOT EXISTS nodes (owner TEXT PRIMARY KEY, url TEXT)`);
+  
+  if (NODE_URL) {
+    registerNode(HOST_USER, NODE_URL);
+  }
+} catch (err) {
+  console.error("Failed to initialize DB:", err);
+}
 
 // --- MIDDLEWARE ---
 app.use(cors());
@@ -302,46 +331,44 @@ app.post('/api/download', requirePin, async (req, res) => {
 
   if (!owner) return res.status(400).json({ error: "Missing owner" });
 
-  db.get('SELECT url FROM nodes WHERE owner = ?', [owner], async (err, row: any) => {
-    if (err || !row || !row.url) return res.status(404).json({ error: "User node not found" });
+  // NEW DATABASE LOGIC START
+  const row = db.prepare('SELECT url FROM nodes WHERE owner = ?').get(owner) as { url: string } | undefined;
     
-    const remoteBaseUrl = row.url;
-    const jobIds: string[] = [];
+  if (!row || !row.url) return res.status(404).json({ error: "User node not found" });
+    
+  const remoteBaseUrl = row.url;
+  const jobIds: string[] = [];
 
-    // Register Jobs
-    queue.forEach(item => {
-       const id = generateId();
-       jobIds.push(id);
-       activeDownloads.set(id, {
-          id,
-          filename: item.filename,
-          remoteUrl: remoteBaseUrl,
-          remotePath: item.remotePath,
-          localPath: path.join(DOWNLOAD_ROOT, item.filename),
-          totalBytes: 0, 
-          downloadedBytes: 0,
-          status: 'pending',
-          startTime: Date.now(),
-          speed: 0
-       });
-    });
-
-    res.json({ success: true, message: `Queued ${queue.length} files.` });
-
-    // BACKGROUND PROCESSING (Sequential Batch)
-    // This uses your new "Loop" strategy which you liked, 
-    // but calls the smart "downloadFile" that supports resume.
-    for (const id of jobIds) {
-      const job = activeDownloads.get(id);
-      if (!job || job.status === 'cancelled') continue;
-      
-      try {
-        await downloadFile(job.remoteUrl, job.remotePath, job.localPath, id);
-      } catch (e) {
-        console.error("Batch error", e);
-      }
-    }
+  // Register Jobs (This part stays largely the same)
+  queue.forEach(item => {
+      const id = generateId();
+      jobIds.push(id);
+      activeDownloads.set(id, {
+        id,
+        filename: item.filename,
+        remoteUrl: remoteBaseUrl,
+        remotePath: item.remotePath,
+        localPath: path.join(DOWNLOAD_ROOT, item.filename),
+        totalBytes: 0, 
+        downloadedBytes: 0,
+        status: 'pending',
+        startTime: Date.now(),
+        speed: 0
+      });
   });
+
+  res.json({ success: true, message: `Queued ${queue.length} files.` });
+
+  // Start background loop
+  for (const id of jobIds) {
+    const job = activeDownloads.get(id);
+    if (!job || job.status === 'cancelled') continue;
+    try {
+      await downloadFile(job.remoteUrl, job.remotePath, job.localPath, id);
+    } catch (e) {
+      console.error("Batch error", e);
+    }
+    } 
 });
 
 app.post('/api/download/cancel', requirePin, (req, res) => {
@@ -429,13 +456,40 @@ app.post('/api/scan', requirePin, async (req, res) => {
 });
 
 app.get('/api/files', requirePin, (req, res) => {
-  db.all(`SELECT m.*, n.url as remote_url FROM media_files m LEFT JOIN nodes n ON m.owner = n.owner ORDER BY m.filename ASC`, (err, rows: any[]) => {
-    if (err) return res.status(500).json({ error: err.message });
-    const files = rows.map(r => ({ ...r, rawFilename: r.filename, sizeBytes: r.size_bytes, lastModified: r.last_modified, remoteUrl: r.remote_url }));
-    db.all('SELECT * FROM nodes', (e2, nodes) => res.json({ files, nodes: nodes || [] }));
-  });
+  try {
+    const rows = db.prepare(`
+      SELECT m.*, n.url as remote_url 
+      FROM media_files m 
+      LEFT JOIN nodes n ON m.owner = n.owner 
+      ORDER BY m.filename ASC
+    `).all() as any[];
+
+    const files = rows.map(r => ({ 
+      ...r, 
+      rawFilename: r.filename, 
+      sizeBytes: r.size_bytes, 
+      lastModified: r.last_modified, 
+      remoteUrl: r.remote_url 
+    }));
+
+    const nodes = db.prepare('SELECT * FROM nodes').all();
+    res.json({ files, nodes: nodes || [] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, '../dist', 'index.html')));
+// Use 'dist' instead of '../dist'
+const distPath = path.join(__dirname, 'dist'); 
 
-app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 running on ${PORT}`));
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    // Don't intercept API calls
+    if (req.path.startsWith('/api')) return res.status(404).json({error: 'Not Found'});
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+} else {
+  // Fallback for Dev Mode (so it doesn't crash)
+  app.get('/', (req, res) => res.send('Server running. For development, use port 5173.'));
+}
