@@ -64,7 +64,18 @@ interface DownloadStatus {
   abortController?: AbortController;
 }
 
+interface UploadStatus {
+  id: string;
+  filename: string;
+  user: string;
+  transferredBytes: number;
+  totalBytes: number;
+  speed: number; // bytes per second
+  startTime: number;
+}
+
 const activeDownloads = new Map<string, DownloadStatus>();
+const activeUploads = new Map<string, UploadStatus>();
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
 // NEW: Global Scan State
@@ -196,10 +207,10 @@ const requireSecret = async (req: Request, res: Response, next: NextFunction) =>
 // --- ROBUST DOWNLOAD LOGIC ---
 
 // Helper: Tries to download ONCE. Returns promise.
-const attemptDownload = (remoteUrl: string, remotePath: string, localPath: string, jobId: string, signal: AbortSignal) => {
+const attemptDownload = (remoteUrl: string, remotePath: string, localPath: string, jobId: string, signal: AbortSignal, requesterUser: string) => {
   const cleanBaseUrl = remoteUrl.replace(/\/$/, '');
   const encodedPath = encodeURIComponent(remotePath);
-  const downloadUrl = `${cleanBaseUrl}/api/serve?path=${encodedPath}`;
+  const downloadUrl = `${cleanBaseUrl}/api/serve?path=${encodedPath}&user=${encodeURIComponent(requesterUser)}`;
   const partPath = `${localPath}.part`;
 
   // Resume Logic: Check how much we have
@@ -348,7 +359,7 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
   while (attempt < MAX_RETRIES) {
     attempt++;
     try {
-       await attemptDownload(remoteUrl, remotePath, localPath, jobId, controller.signal);
+       await attemptDownload(remoteUrl, remotePath, localPath, jobId, controller.signal, HOST_USER);
        
        // SUCCESS! Rename .part to actual file
        const partPath = `${localPath}.part`;
@@ -433,6 +444,11 @@ app.get('/api/inventory', requirePin, async (req, res) => {
 
 app.get('/api/scan-status', requirePin, (req, res) => {
   res.json(globalScanStatus);
+});
+
+app.get('/api/uploads', requirePin, (req, res) => {
+  const list = Array.from(activeUploads.values()).sort((a,b) => b.startTime - a.startTime);
+  res.json(list);
 });
 
 app.post('/api/download', requirePin, async (req, res) => {
@@ -551,6 +567,9 @@ app.post('/api/test-connection', requirePin, async (req, res) => {
 
 app.get('/api/serve', requireSecret, (req, res) => {
   const p = req.query.path as string;
+  // NEW: Grab the user from the query param
+  const requester = (req.query.user as string) || 'Guest';
+
   if (!p) return res.status(400).send('Missing path');
   const abs = path.resolve(p);
   const root = path.resolve(MEDIA_ROOT);
@@ -559,6 +578,45 @@ app.get('/api/serve', requireSecret, (req, res) => {
   const stat = fs.statSync(abs);
   const fileSize = stat.size;
   const range = req.headers.range;
+
+  // --- NEW: TRACKING LOGIC ---
+  const uploadId = generateId();
+  activeUploads.set(uploadId, {
+    id: uploadId,
+    filename: path.basename(abs),
+    user: requester,
+    transferredBytes: 0,
+    totalBytes: fileSize,
+    speed: 0,
+    startTime: Date.now()
+  });
+
+  // Helper to update speed calculations while stream flows
+  const attachTracking = (stream: fs.ReadStream) => {
+     let lastTime = Date.now();
+     let lastBytes = 0;
+
+     stream.on('data', (chunk) => {
+       const job = activeUploads.get(uploadId);
+       if (job) {
+          job.transferredBytes += chunk.length;
+          
+          const now = Date.now();
+          if (now - lastTime > 1000) {
+             const seconds = (now - lastTime) / 1000;
+             // Bytes sent since last check / seconds
+             job.speed = Math.floor((job.transferredBytes - lastBytes) / seconds);
+             lastTime = now;
+             lastBytes = job.transferredBytes;
+          }
+       }
+     });
+
+     // Cleanup when done or error
+     stream.on('close', () => activeUploads.delete(uploadId));
+     stream.on('error', () => activeUploads.delete(uploadId));
+  };
+  // ---------------------------
 
   if (range) {
     const parts = range.replace(/bytes=/, "").split("-");
@@ -571,10 +629,14 @@ app.get('/api/serve', requireSecret, (req, res) => {
       'Content-Length': chunk,
       'Content-Type': 'application/octet-stream',
     });
-    fs.createReadStream(abs, { start, end }).pipe(res);
+    const stream = fs.createReadStream(abs, { start, end });
+    attachTracking(stream); // <--- Attach tracker here
+    stream.pipe(res);
   } else {
     res.writeHead(200, { 'Content-Length': fileSize, 'Content-Type': 'application/octet-stream' });
-    fs.createReadStream(abs).pipe(res);
+    const stream = fs.createReadStream(abs);
+    attachTracking(stream); // <--- Attach tracker here
+    stream.pipe(res);
   }
 });
 

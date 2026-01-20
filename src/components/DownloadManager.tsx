@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { formatBytes } from '../utils/mediaUtils';
 import { DownloadStatus } from '../types';
+import { UploadStatus } from '../App';
 
 interface DownloadManagerProps {
     isOpen: boolean;
     onClose: () => void;
     pin: string;
+    downloads: DownloadStatus[];
+    uploads: UploadStatus[];
 }
 
 interface DiskInfo {
@@ -25,41 +28,27 @@ const formatDuration = (seconds: number) => {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
 };
 
-const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin }) => {
-    const [downloads, setDownloads] = useState<DownloadStatus[]>([]);
+const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin, downloads, uploads }) => {
+    
+    // View mode for Tabs
+    const [viewMode, setViewMode] = useState<'downloads' | 'uploads'>('downloads');
     const [disk, setDisk] = useState<DiskInfo | null>(null);
 
-    // Poll for updates when the modal is open
+    // Poll ONLY for Disk Space (App.tsx handles downloads/uploads now)
     useEffect(() => {
         if (!isOpen) return;
 
-        const fetchStatus = async () => {
+        const fetchDisk = async () => {
             try {
-                // 1. Get Downloads
-                const res = await fetch('/api/downloads', {
-                    headers: { 'x-app-pin': pin }
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    setDownloads(data);
-                }
-
-                // 2. Get Disk Space (every 5 seconds roughly, but we do it here for simplicity)
                 const diskRes = await fetch('/api/disk', { headers: { 'x-app-pin': pin } });
-                if (diskRes.ok) {
-                    setDisk(await diskRes.json());
-                }
-
-            } catch (e) {
-                console.error(e);
-            }
+                if (diskRes.ok) setDisk(await diskRes.json());
+            } catch (e) { console.error(e); }
         };
 
-        fetchStatus();
-        const interval = setInterval(fetchStatus, 1000);
+        fetchDisk();
+        const interval = setInterval(fetchDisk, 5000); // Check disk every 5s is enough
         return () => clearInterval(interval);
     }, [isOpen, pin]);
-
     const handleCancel = async (id: string) => {
         await fetch('/api/download/cancel', {
             method: 'POST',
@@ -98,104 +87,145 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin 
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
                 
-                {/* Header */}
-                <div className="p-4 border-b border-gray-700 bg-gray-900/50 flex justify-between items-center">
-                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                        <svg className="w-5 h-5 text-plex-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                        Downloads
-                    </h2>
-                    <div className="flex gap-2">
-                        {downloads.some(d => ['completed', 'error', 'cancelled'].includes(d.status)) && (
-                            <button onClick={handleClear} className="text-xs font-bold text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-700 transition-colors">
-                                Clear Finished
-                            </button>
-                        )}
+                {/* --- HEADER WITH TABS --- */}
+                <div className="p-4 border-b border-gray-700 bg-gray-900/50 flex flex-col gap-3">
+                    <div className="flex justify-between items-center">
+                        <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                            <span className="text-plex-orange">⚡</span> Network Activity
+                        </h2>
                         <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
                             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
                     </div>
+
+                    {/* TABS */}
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={() => setViewMode('downloads')}
+                            className={`flex-1 py-1.5 text-sm font-bold rounded transition-colors ${
+                                viewMode === 'downloads' ? 'bg-gray-700 text-white shadow' : 'text-gray-500 hover:bg-gray-800'
+                            }`}
+                        >
+                            Downloads ({downloads.length})
+                        </button>
+                        <button 
+                            onClick={() => setViewMode('uploads')}
+                            className={`flex-1 py-1.5 text-sm font-bold rounded transition-colors ${
+                                viewMode === 'uploads' ? 'bg-blue-900/40 text-blue-200 border border-blue-500/30' : 'text-gray-500 hover:bg-gray-800'
+                            }`}
+                        >
+                            Serving ({uploads.length})
+                        </button>
+                    </div>
                 </div>
 
-                {/* List */}
+                {/* --- LIST AREA --- */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-                    {downloads.length === 0 ? (
-                        <div className="text-center text-gray-500 py-10">No active downloads</div>
-                    ) : (
-                        downloads.map(item => {
-                            const isError = item.status === 'error';
-                            const isCancelled = item.status === 'cancelled';
-                            const isDone = item.status === 'completed' || item.status === 'skipped';
-                            const isDownloading = item.status === 'downloading';
-                            
-                            const percent = item.totalBytes > 0 ? (item.downloadedBytes / item.totalBytes) * 100 : 0;
-                            const remainingBytes = item.totalBytes - item.downloadedBytes;
-                            const eta = (item.speed && item.speed > 0) ? remainingBytes / item.speed : -1;
+                    
+                    {/* === VIEW 1: DOWNLOADS === */}
+                    {viewMode === 'downloads' && (
+                        <>
+                            {downloads.length === 0 ? (
+                                <div className="text-center text-gray-500 py-10">No active downloads</div>
+                            ) : (
+                                downloads.map(item => {
+                                    /* ... EXISTING DOWNLOAD CARD CODE ... */
+                                    /* Paste your original Download Card Logic here. */
+                                    /* I will include it below for completeness */
+                                    const isError = item.status === 'error';
+                                    const isCancelled = item.status === 'cancelled';
+                                    const isDone = item.status === 'completed' || item.status === 'skipped';
+                                    const isDownloading = item.status === 'downloading';
+                                    const percent = item.totalBytes > 0 ? (item.downloadedBytes / item.totalBytes) * 100 : 0;
+                                    const remainingBytes = item.totalBytes - item.downloadedBytes;
+                                    const eta = (item.speed && item.speed > 0) ? remainingBytes / item.speed : -1;
 
-                            return (
-                                <div key={item.id} className="bg-gray-900/50 rounded p-3 border border-gray-700/50">
-                                    <div className="flex justify-between items-start mb-1">
-                                        <div className="text-sm font-bold text-gray-200 truncate pr-4 max-w-[70%]">
-                                            {item.filename}
+                                    return (
+                                        <div key={item.id} className="bg-gray-900/50 rounded p-3 border border-gray-700/50">
+                                            <div className="flex justify-between items-start mb-1">
+                                                <div className="text-sm font-bold text-gray-200 truncate pr-4 max-w-[70%]">
+                                                    {item.filename}
+                                                </div>
+                                                <div className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${
+                                                    isError ? 'bg-red-900/50 text-red-400' :
+                                                    isDone ? 'bg-green-900/50 text-green-400' :
+                                                    isCancelled ? 'bg-gray-700 text-gray-400' :
+                                                    'bg-blue-900/50 text-blue-400'
+                                                }`}>
+                                                    {item.status}
+                                                </div>
+                                            </div>
+                                            <div className="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden mb-2">
+                                                <div className={`h-full transition-all duration-500 ${isError || isCancelled ? 'bg-gray-500' : isDone ? 'bg-green-500' : 'bg-plex-orange'}`} style={{ width: `${percent}%` }}></div>
+                                            </div>
+                                            <div className="flex justify-between items-center text-[10px] text-gray-400 font-mono">
+                                                <div className="flex gap-3">
+                                                    <span>{formatBytes(item.downloadedBytes)} / {formatBytes(item.totalBytes)}</span>
+                                                    {isDownloading && item.speed && <span className="text-gray-300">{formatBytes(item.speed)}/s</span>}
+                                                </div>
+                                                <div className="flex items-center gap-3">
+                                                    {isDownloading && eta > 0 && <span>ETA: {formatDuration(eta)}</span>}
+                                                    {(isDownloading || item.status === 'pending') && (
+                                                        <button onClick={() => handleCancel(item.id)} className="text-red-400 hover:text-white">CANCEL</button>
+                                                    )}
+                                                    {(isError || isCancelled) && (
+                                                        <button onClick={() => handleRetry(item.id)} className="text-plex-orange hover:text-white">RETRY</button>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${
-                                            isError ? 'bg-red-900/50 text-red-400' :
-                                            isDone ? 'bg-green-900/50 text-green-400' :
-                                            isCancelled ? 'bg-gray-700 text-gray-400' :
-                                            'bg-blue-900/50 text-blue-400'
-                                        }`}>
-                                            {item.status}
+                                    );
+                                })
+                            )}
+                            {/* Clear Finished Button (Only for Downloads) */}
+                            {downloads.some(d => ['completed', 'error', 'cancelled'].includes(d.status)) && (
+                                <button onClick={handleClear} className="w-full py-2 text-xs font-bold text-gray-500 hover:text-white border border-dashed border-gray-700 hover:border-gray-500 rounded transition-colors mt-4">
+                                    Clear Finished
+                                </button>
+                            )}
+                        </>
+                    )}
+
+                    {/* === VIEW 2: UPLOADS (New!) === */}
+                    {viewMode === 'uploads' && (
+                        <>
+                            {uploads.length === 0 ? (
+                                <div className="text-center text-gray-500 py-10">No active uploads</div>
+                            ) : (
+                                uploads.map(item => {
+                                    const percent = item.totalBytes > 0 ? (item.transferredBytes / item.totalBytes) * 100 : 0;
+                                    return (
+                                        <div key={item.id} className="bg-blue-900/10 rounded p-3 border border-blue-500/20 relative overflow-hidden">
+                                            {/* Pulse Animation */}
+                                            <div className="absolute top-0 left-0 w-1 h-full bg-blue-500/50 animate-pulse"></div>
+                                            
+                                            <div className="flex justify-between items-start mb-2 pl-2">
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="text-[10px] uppercase font-bold text-blue-300 mb-0.5">Serving to: {item.user}</div>
+                                                    <div className="text-sm font-bold text-gray-200 truncate">{item.filename}</div>
+                                                </div>
+                                                <div className="text-blue-400 font-mono text-xs bg-blue-900/40 px-2 py-1 rounded border border-blue-500/20 ml-2">
+                                                    {formatBytes(item.speed)}/s
+                                                </div>
+                                            </div>
+
+                                            <div className="h-1.5 w-full bg-gray-700/50 rounded-full overflow-hidden mb-2 ml-2 w-[calc(100%-8px)]">
+                                                <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${percent}%` }}></div>
+                                            </div>
+
+                                            <div className="flex justify-between text-[10px] text-gray-400 font-mono pl-2">
+                                                <span>Sent: {formatBytes(item.transferredBytes)}</span>
+                                                <span>Total: {formatBytes(item.totalBytes)}</span>
+                                            </div>
                                         </div>
-                                    </div>
-
-                                    {/* Progress Bar */}
-                                    <div className="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden mb-2">
-                                        <div 
-                                            className={`h-full transition-all duration-500 ${isError || isCancelled ? 'bg-gray-500' : isDone ? 'bg-green-500' : 'bg-plex-orange'}`} 
-                                            style={{ width: `${percent}%` }}
-                                        ></div>
-                                    </div>
-
-                                    {/* Stats */}
-                                    <div className="flex justify-between items-center text-[10px] text-gray-400 font-mono">
-                                        <div className="flex gap-3">
-                                            <span>{formatBytes(item.downloadedBytes)} / {formatBytes(item.totalBytes)}</span>
-                                            {isDownloading && item.speed && (
-                                                <span className="text-gray-300">{formatBytes(item.speed)}/s</span>
-                                            )}
-                                        </div>
-                                        
-                                        <div className="flex items-center gap-3">
-                                            {isDownloading && eta > 0 && (
-                                                <span>ETA: {formatDuration(eta)}</span>
-                                            )}
-
-                                            {/* Actions */}
-                                            {(isDownloading || item.status === 'pending') && (
-                                                <button 
-                                                    onClick={() => handleCancel(item.id)}
-                                                    className="text-[10px] font-bold text-red-400 hover:text-red-300 border border-red-900/50 bg-red-900/20 hover:bg-red-900/40 px-2 py-1 rounded transition-colors"
-                                                >
-                                                    CANCEL
-                                                </button>
-                                            )}
-
-                                            {(isError || isCancelled) && (
-                                                <button 
-                                                    onClick={() => handleRetry(item.id)}
-                                                    className="text-[10px] font-bold text-plex-orange hover:text-yellow-400 border border-plex-orange/50 bg-plex-orange/10 px-2 py-1 rounded transition-colors"
-                                                >
-                                                    RETRY
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })
+                                    );
+                                })
+                            )}
+                        </>
                     )}
                 </div>
 
-                {/* Disk Space Footer */}
+                {/* Disk Space Footer (Kept same) */}
                 {disk && (
                     <div className="bg-gray-900 border-t border-gray-700 p-3">
                         <div className="flex justify-between text-xs text-gray-400 mb-1">
@@ -203,10 +233,7 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin 
                             <span>{formatBytes(disk.free)} Free / {formatBytes(disk.size)} Total</span>
                         </div>
                         <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden flex">
-                            <div 
-                                className={`h-full transition-all duration-1000 ${usedPercent > 90 ? 'bg-red-500' : usedPercent > 75 ? 'bg-yellow-500' : 'bg-green-600'}`} 
-                                style={{ width: `${usedPercent}%` }}
-                            ></div>
+                            <div className={`h-full transition-all duration-1000 ${usedPercent > 90 ? 'bg-red-500' : usedPercent > 75 ? 'bg-yellow-500' : 'bg-green-600'}`} style={{ width: `${usedPercent}%` }}></div>
                         </div>
                     </div>
                 )}
