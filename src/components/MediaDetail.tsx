@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { MediaItem, MediaFile, AppConfig } from '../types';
+import { MediaItem, MediaFile, AppConfig, DownloadStatus } from '../types';
 import { useToast } from './ToastContext';
 import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
 interface MediaDetailProps {
   item: MediaItem;
   onClose: () => void;
-  activeDownloads?: any[];
+  activeDownloads?: DownloadStatus[];
   completeFiles?: Set<string>; 
   partialFiles?: Set<string>;
 }
