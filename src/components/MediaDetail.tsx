@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { MediaItem, MediaFile, AppConfig } from '../types';
+import { useToast } from './ToastContext';
 import { formatBytes, parseEpisodeInfo, getEpisodeTitle, get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
 interface MediaDetailProps {
@@ -22,7 +23,6 @@ interface ProcessedFile extends MediaFile {
   audioFormat?: string | null;
   editionTag?: string | null;
 }
-
 const getIcon = (type: string, isAlbum = false) => {
   switch (type) {
     case 'Movie': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>;
@@ -47,6 +47,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
   partialFiles = new Set() 
 }) => {
   const [loadedFiles, setLoadedFiles] = useState<ProcessedFile[]>([]);
+  const { addToast } = useToast();
   const [copiedState, setCopiedState] = useState<string | null>(null);
   const [filterOwner, setFilterOwner] = useState<string | null>(null);
   const [canDownload, setCanDownload] = useState(false);
@@ -97,7 +98,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
          next.delete(file.path);
          return next;
       });
-      alert("Download failed.");
+      addToast("Download failed", "error");
     }
   };
 
@@ -106,7 +107,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
     const filesToDownload = files.filter(f => f.owner !== currentUser && !completeFiles.has(f.rawFilename));
     
     if (filesToDownload.length === 0) {
-        alert("All files in this set are already downloaded.");
+        addToast("All files downloaded", "info");
         return;
     }
 

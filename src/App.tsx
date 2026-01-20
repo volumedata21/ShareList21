@@ -4,6 +4,7 @@ import { fuzzyMatch, cleanName, getMediaType, getSeriesName, getMusicMetadata } 
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
 import DownloadManager from './components/DownloadManager';
+import { useToast } from './components/ToastContext';
 
 // Structure for tracking active downloads in the UI
 interface DownloadItem {
@@ -16,6 +17,7 @@ interface DownloadItem {
 }
 
 const App: React.FC = () => {
+  const { addToast } = useToast();
   // --- Auth & Config ---
   const [configLoading, setConfigLoading] = useState(true);
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -211,7 +213,10 @@ const App: React.FC = () => {
       sessionStorage.setItem('pf_pin', pinToUse);
       setIsLocked(false);
     } catch (e: any) {
-      if (e.message !== "Invalid PIN") alert(`Connection Error: ${e.message}`);
+      // USE TOAST HERE
+      if (e.message !== "Invalid PIN") {
+          addToast(`Connection Error: ${e.message}`, 'error');
+      }
       throw e; 
     } finally {
       setLoading(false);
