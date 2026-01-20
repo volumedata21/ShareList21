@@ -611,4 +611,22 @@ if (fs.existsSync(distPath)) {
   app.get('/', (req, res) => res.send('Server running. For development, use port 5173.'));
 }
 
+cron.schedule('0 * * * *', () => {
+  const ONE_HOUR = 60 * 60 * 1000;
+  const now = Date.now();
+  let removed = 0;
+  
+  for (const [id, job] of activeDownloads.entries()) {
+    // Only remove jobs that are in a "Final" state
+    if (['completed', 'error', 'cancelled', 'skipped'].includes(job.status)) {
+       // If it started more than 1 hour ago, forget it
+       if (now - job.startTime > ONE_HOUR) {
+          activeDownloads.delete(id);
+          removed++;
+       }
+    }
+  }
+  if (removed > 0) console.log(`[GC] Removed ${removed} old download jobs.`);
+});
+
 app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 running on ${PORT}`));

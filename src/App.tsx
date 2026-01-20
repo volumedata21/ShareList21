@@ -55,44 +55,47 @@ const App: React.FC = () => {
   } | null>(null);
 
   // --- POLLING: Downloads & Inventory ---
+  // --- SMART POLLING (Self-Scheduling Loop) ---
   useEffect(() => {
     if (isLocked || !activePin) return;
+    
+    let isMounted = true;
+    let timeoutId: any;
 
-    const fetchDownloads = () => {
-      fetch('/api/downloads', { headers: { 'x-app-pin': activePin } })
-        .then(res => res.json())
-        .then((data: any) => {
+    const poll = async () => {
+      try {
+        // 1. Fetch Downloads (Fast)
+        const dRes = await fetch('/api/downloads', { headers: { 'x-app-pin': activePin } });
+        if (isMounted && dRes.ok) {
+            const data = await dRes.json();
             if (Array.isArray(data)) setActiveDownloads(data);
-        })
-        .catch(console.error);
+        }
+
+        // 2. Fetch Inventory (Check less often if needed, but safe here due to serial await)
+        const iRes = await fetch('/api/inventory', { headers: { 'x-app-pin': activePin } });
+        if (isMounted && iRes.ok) {
+           const data = await iRes.json();
+           const complete = Array.isArray(data?.complete) ? data.complete : [];
+           const partials = Array.isArray(data?.partials) ? data.partials : [];
+           setInventory({
+               complete: new Set(complete),
+               partials: new Set(partials)
+           });
+        }
+      } catch (e) {
+        console.error("Poll error (retrying in 2s)", e);
+      } finally {
+        // 3. ONLY schedule the next run when the current one is completely finished.
+        // This prevents "request pile-up" on slow networks.
+        if (isMounted) timeoutId = setTimeout(poll, 2000);
+      }
     };
 
-    const fetchInventory = () => {
-      fetch('/api/inventory', { headers: { 'x-app-pin': activePin } })
-        .then(res => res.json())
-        .then((data: any) => {
-            // SAFETY CHECK: Ensure we have arrays before making Sets
-            const complete = Array.isArray(data?.complete) ? data.complete : [];
-            const partials = Array.isArray(data?.partials) ? data.partials : [];
-            setInventory({
-                complete: new Set(complete),
-                partials: new Set(partials)
-            });
-        })
-        .catch(console.error);
-    };
-
-    // Initial Load
-    fetchDownloads();
-    fetchInventory();
-
-    // Intervals
-    const downloadPoll = setInterval(fetchDownloads, 2000); // Active downloads (fast)
-    const inventoryPoll = setInterval(fetchInventory, 10000); // Disk inventory (slow)
+    poll(); // Start the loop
 
     return () => {
-      clearInterval(downloadPoll);
-      clearInterval(inventoryPoll);
+      isMounted = false;
+      clearTimeout(timeoutId);
     };
   }, [activePin, isLocked]);
 
