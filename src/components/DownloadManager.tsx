@@ -1,20 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { formatBytes } from '../utils/mediaUtils';
+import { DownloadStatus } from '../types';
 
 interface DownloadManagerProps {
     isOpen: boolean;
     onClose: () => void;
     pin: string;
-}
-
-interface DownloadStatus {
-    id: string;
-    filename: string;
-    totalBytes: number;
-    downloadedBytes: number;
-    status: 'pending' | 'downloading' | 'completed' | 'error' | 'cancelled' | 'skipped';
-    speed?: number; // bytes per second
-    error?: string;
 }
 
 interface DiskInfo {

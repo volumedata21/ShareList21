@@ -14,7 +14,7 @@ export interface MediaFile {
   sizeBytes: number;
   lastModified: number;
   owner: string;
-  remoteUrl?: string; // NEW: The specific URL to reach this file's server
+  remoteUrl?: string;
 }
 
 export interface MediaItem {
@@ -28,6 +28,18 @@ export type FilterType = 'All' | 'Movie' | 'TV Show' | 'Music';
 
 export interface SyncPayload {
   owner: string;
-  url: string; // NEW: The Client announcing their address
+  url: string;
   files: MediaFile[];
+}
+
+// NEW: The Master Definition
+export interface DownloadStatus {
+  id: string;
+  filename: string;
+  totalBytes: number;
+  downloadedBytes: number;
+  status: 'pending' | 'downloading' | 'completed' | 'error' | 'cancelled' | 'skipped';
+  speed?: number;
+  error?: string;
+  remotePath?: string;
 }

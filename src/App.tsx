@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { MediaItem, MediaFile, FilterType, AppConfig } from './types';
+import { MediaItem, MediaFile, FilterType, AppConfig, DownloadStatus } from './types';
 import { fuzzyMatch, cleanName, getMediaType, getSeriesName, getMusicMetadata } from './utils/mediaUtils';
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
@@ -7,14 +7,6 @@ import DownloadManager from './components/DownloadManager';
 import { useToast } from './components/ToastContext';
 
 // Structure for tracking active downloads in the UI
-interface DownloadItem {
-  id: string;
-  filename: string;
-  totalBytes: number;
-  downloadedBytes: number;
-  status: 'pending' | 'downloading' | 'completed' | 'error' | 'cancelled' | 'skipped';
-  remotePath?: string; 
-}
 
 const App: React.FC = () => {
   const { addToast } = useToast();
@@ -42,7 +34,7 @@ const App: React.FC = () => {
   
   // --- Download & Inventory State ---
   const [showDownloads, setShowDownloads] = useState(false);
-  const [activeDownloads, setActiveDownloads] = useState<DownloadItem[]>([]);
+  const [activeDownloads, setActiveDownloads] = useState<DownloadStatus[]>([]);
   
   // NEW: State object to track both complete files and partial (.part) files
   const [inventory, setInventory] = useState<{ complete: Set<string>, partials: Set<string> }>({ 
