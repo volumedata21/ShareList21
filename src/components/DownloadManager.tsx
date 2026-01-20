@@ -17,6 +17,11 @@ interface DownloadStatus {
     error?: string;
 }
 
+interface DiskInfo {
+    free: number;
+    size: number;
+}
+
 const formatDuration = (seconds: number) => {
     if (!isFinite(seconds) || seconds < 0) return '--:--';
     const m = Math.floor(seconds / 60);
@@ -31,6 +36,7 @@ const formatDuration = (seconds: number) => {
 
 const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin }) => {
     const [downloads, setDownloads] = useState<DownloadStatus[]>([]);
+    const [disk, setDisk] = useState<DiskInfo | null>(null);
 
     // Poll for updates when the modal is open
     useEffect(() => {
@@ -38,6 +44,7 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin 
 
         const fetchStatus = async () => {
             try {
+                // 1. Get Downloads
                 const res = await fetch('/api/downloads', {
                     headers: { 'x-app-pin': pin }
                 });
@@ -45,189 +52,173 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin 
                     const data = await res.json();
                     setDownloads(data);
                 }
+
+                // 2. Get Disk Space (every 5 seconds roughly, but we do it here for simplicity)
+                const diskRes = await fetch('/api/disk', { headers: { 'x-app-pin': pin } });
+                if (diskRes.ok) {
+                    setDisk(await diskRes.json());
+                }
+
             } catch (e) {
-                // Silent error to prevent log spam
+                console.error(e);
             }
         };
 
-        fetchStatus(); // Initial fetch
-        const interval = setInterval(fetchStatus, 1000); // Poll every 1s
-
+        fetchStatus();
+        const interval = setInterval(fetchStatus, 1000);
         return () => clearInterval(interval);
     }, [isOpen, pin]);
 
-    // Actions
     const handleCancel = async (id: string) => {
-        try {
-            await fetch('/api/download/cancel', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-app-pin': pin },
-                body: JSON.stringify({ id })
-            });
-            // Optimistic update
-            setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'cancelled', speed: 0 } : d));
-        } catch (e) {
-            console.error("Failed to cancel", e);
-        }
+        await fetch('/api/download/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-app-pin': pin },
+            body: JSON.stringify({ id })
+        });
     };
 
     const handleRetry = async (id: string) => {
-        try {
-            await fetch('/api/download/retry', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-app-pin': pin },
-                body: JSON.stringify({ id })
-            });
-            // Optimistic Update
-            setDownloads(prev => prev.map(d => d.id === id ? { ...d, status: 'pending', error: undefined } : d));
-        } catch (e) {
-            console.error("Retry failed", e);
-        }
+        await fetch('/api/download/retry', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-app-pin': pin },
+            body: JSON.stringify({ id })
+        });
     };
 
-    const handleClearCompleted = async () => {
-        try {
-            await fetch('/api/downloads/clear', {
-                method: 'POST',
-                headers: { 'x-app-pin': pin }
-            });
-            // Optimistic Update: Remove finished items locally
-            setDownloads(prev => prev.filter(d => d.status === 'downloading' || d.status === 'pending'));
-        } catch (e) {
-            console.error("Clear failed", e);
-        }
+    const handleClear = async () => {
+        await fetch('/api/downloads/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-app-pin': pin }
+        });
+        setDownloads(prev => prev.filter(d => d.status === 'downloading' || d.status === 'pending'));
     };
 
     if (!isOpen) return null;
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-start justify-end p-4 sm:p-6 pointer-events-none">
-            {/* Container - Pointer events auto to allow clicking inside */}
-            <div className="w-full max-w-sm bg-gray-800 border border-gray-700 rounded-xl shadow-2xl pointer-events-auto overflow-hidden flex flex-col max-h-[80vh]">
+    // Calculate disk stats
+    let freePercent = 0;
+    let usedPercent = 0;
+    if (disk && disk.size > 0) {
+        freePercent = (disk.free / disk.size) * 100;
+        usedPercent = 100 - freePercent;
+    }
 
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+                
                 {/* Header */}
-                <div className="p-4 bg-gray-900/90 border-b border-gray-700 flex justify-between items-center backdrop-blur-sm">
-                    <h3 className="text-white font-bold flex items-center gap-2">
-                        <svg className="w-5 h-5 text-plex-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
+                <div className="p-4 border-b border-gray-700 bg-gray-900/50 flex justify-between items-center">
+                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                        <svg className="w-5 h-5 text-plex-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                         Downloads
-                    </h3>
-                    <div className="flex items-center gap-2">
-                        {/* Clear Button (Visible if there are items to clear) */}
-                        {downloads.some(d => ['completed', 'error', 'cancelled', 'skipped'].includes(d.status)) && (
-                            <button
-                                onClick={handleClearCompleted}
-                                className="text-[10px] uppercase font-bold text-gray-400 hover:text-white border border-gray-600 px-2 py-1 rounded transition-colors"
-                            >
-                                Clear Done
+                    </h2>
+                    <div className="flex gap-2">
+                        {downloads.some(d => ['completed', 'error', 'cancelled'].includes(d.status)) && (
+                            <button onClick={handleClear} className="text-xs font-bold text-gray-400 hover:text-white px-2 py-1 rounded hover:bg-gray-700 transition-colors">
+                                Clear Finished
                             </button>
                         )}
                         <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
-                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
+                            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
                     </div>
                 </div>
 
-                {/* Content */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {/* List */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
                     {downloads.length === 0 ? (
-                        <div className="text-center py-8 text-gray-500 text-sm">
-                            No active downloads.
-                        </div>
+                        <div className="text-center text-gray-500 py-10">No active downloads</div>
                     ) : (
-                        downloads.map((item) => {
-                            const percent = item.totalBytes > 0
-                                ? Math.min(100, Math.round((item.downloadedBytes / item.totalBytes) * 100))
-                                : 0;
-
-                            const isDone = item.status === 'completed';
-                            const isSkipped = item.status === 'skipped';
+                        downloads.map(item => {
                             const isError = item.status === 'error';
                             const isCancelled = item.status === 'cancelled';
-                            const isActive = item.status === 'downloading';
-
-                            // Speed & ETA Calc
-                            const speed = item.speed || 0;
+                            const isDone = item.status === 'completed' || item.status === 'skipped';
+                            const isDownloading = item.status === 'downloading';
+                            
+                            const percent = item.totalBytes > 0 ? (item.downloadedBytes / item.totalBytes) * 100 : 0;
                             const remainingBytes = item.totalBytes - item.downloadedBytes;
-                            const etaSeconds = speed > 0 ? remainingBytes / speed : 0;
+                            const eta = (item.speed && item.speed > 0) ? remainingBytes / item.speed : -1;
 
                             return (
-                                <div key={item.id} className="bg-gray-900/50 rounded-lg p-3 border border-gray-700/50">
-                                    <div className="flex justify-between items-start mb-1 gap-2">
-                                        <div className="text-xs font-bold text-gray-200 truncate flex-1" title={item.filename}>
-                                            {item.filename.split('/').pop()}
+                                <div key={item.id} className="bg-gray-900/50 rounded p-3 border border-gray-700/50">
+                                    <div className="flex justify-between items-start mb-1">
+                                        <div className="text-sm font-bold text-gray-200 truncate pr-4 max-w-[70%]">
+                                            {item.filename}
                                         </div>
-                                        <div className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded 
-                      ${isDone ? 'bg-green-500/20 text-green-400' :
-                                                isSkipped ? 'bg-gray-600/50 text-gray-300' :
-                                                    isError || isCancelled ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'}`}>
+                                        <div className={`text-xs font-bold px-2 py-0.5 rounded uppercase ${
+                                            isError ? 'bg-red-900/50 text-red-400' :
+                                            isDone ? 'bg-green-900/50 text-green-400' :
+                                            isCancelled ? 'bg-gray-700 text-gray-400' :
+                                            'bg-blue-900/50 text-blue-400'
+                                        }`}>
                                             {item.status}
                                         </div>
                                     </div>
 
-                                    {/* Progress Bar Container */}
-                                    <div className="relative w-full h-1.5 bg-gray-700 rounded-full overflow-hidden mt-2 mb-1">
-                                        <div
-                                            className={`absolute top-0 left-0 h-full transition-all duration-300 ease-out 
-                        ${isDone ? 'bg-green-500' : isSkipped ? 'bg-gray-500' : (isError || isCancelled) ? 'bg-red-500' : 'bg-plex-orange'}`}
-                                            style={{ width: `${(isDone || isCancelled || isSkipped) ? 100 : percent}%` }}
-                                        />
+                                    {/* Progress Bar */}
+                                    <div className="h-1.5 w-full bg-gray-700 rounded-full overflow-hidden mb-2">
+                                        <div 
+                                            className={`h-full transition-all duration-500 ${isError || isCancelled ? 'bg-gray-500' : isDone ? 'bg-green-500' : 'bg-plex-orange'}`} 
+                                            style={{ width: `${percent}%` }}
+                                        ></div>
                                     </div>
 
-                                    {/* Meta Stats */}
-                                    <div className="flex justify-between text-[10px] text-gray-500 font-mono mt-1">
-                                        <span>{formatBytes(item.downloadedBytes)} / {item.totalBytes ? formatBytes(item.totalBytes) : '?'}</span>
-
-                                        {isActive ? (
-                                            <span className="text-gray-300 flex gap-2">
-                                                <span>{formatBytes(speed)}/s</span>
-                                                <span className="text-gray-500">•</span>
-                                                <span>ETA: {formatDuration(etaSeconds)}</span>
-                                            </span>
-                                        ) : isSkipped ? (
-                                            <span className="text-gray-400 italic">File exists on disk</span>
-                                        ) : (
-                                            <span>{percent}%</span>
-                                        )}
-                                    </div>
-
-                                    {item.error && (
-                                        <div className="text-[10px] text-red-400 mt-1 truncate">
-                                            Error: {item.error}
+                                    {/* Stats */}
+                                    <div className="flex justify-between items-center text-[10px] text-gray-400 font-mono">
+                                        <div className="flex gap-3">
+                                            <span>{formatBytes(item.downloadedBytes)} / {formatBytes(item.totalBytes)}</span>
+                                            {isDownloading && item.speed && (
+                                                <span className="text-gray-300">{formatBytes(item.speed)}/s</span>
+                                            )}
                                         </div>
-                                    )}
+                                        
+                                        <div className="flex items-center gap-3">
+                                            {isDownloading && eta > 0 && (
+                                                <span>ETA: {formatDuration(eta)}</span>
+                                            )}
 
-                                    {/* Actions Row */}
-                                    <div className="mt-2 flex justify-end gap-2">
+                                            {/* Actions */}
+                                            {(isDownloading || item.status === 'pending') && (
+                                                <button 
+                                                    onClick={() => handleCancel(item.id)}
+                                                    className="text-[10px] font-bold text-red-400 hover:text-red-300 border border-red-900/50 bg-red-900/20 hover:bg-red-900/40 px-2 py-1 rounded transition-colors"
+                                                >
+                                                    CANCEL
+                                                </button>
+                                            )}
 
-                                        {/* Cancel Button */}
-                                        {(isActive || item.status === 'pending') && (
-                                            <button
-                                                onClick={() => handleCancel(item.id)}
-                                                className="text-[10px] font-bold text-red-400 hover:text-red-300 border border-red-900/50 bg-red-900/20 hover:bg-red-900/40 px-2 py-1 rounded transition-colors"
-                                            >
-                                                CANCEL
-                                            </button>
-                                        )}
-
-                                        {/* Retry Button */}
-                                        {(isError || isCancelled) && (
-                                            <button
-                                                onClick={() => handleRetry(item.id)}
-                                                className="text-[10px] font-bold text-plex-orange hover:text-yellow-400 border border-plex-orange/50 bg-plex-orange/10 px-2 py-1 rounded transition-colors"
-                                            >
-                                                RETRY
-                                            </button>
-                                        )}
+                                            {(isError || isCancelled) && (
+                                                <button 
+                                                    onClick={() => handleRetry(item.id)}
+                                                    className="text-[10px] font-bold text-plex-orange hover:text-yellow-400 border border-plex-orange/50 bg-plex-orange/10 px-2 py-1 rounded transition-colors"
+                                                >
+                                                    RETRY
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             );
                         })
                     )}
                 </div>
+
+                {/* Disk Space Footer */}
+                {disk && (
+                    <div className="bg-gray-900 border-t border-gray-700 p-3">
+                        <div className="flex justify-between text-xs text-gray-400 mb-1">
+                            <span>Storage Usage</span>
+                            <span>{formatBytes(disk.free)} Free / {formatBytes(disk.size)} Total</span>
+                        </div>
+                        <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden flex">
+                            <div 
+                                className={`h-full transition-all duration-1000 ${usedPercent > 90 ? 'bg-red-500' : usedPercent > 75 ? 'bg-yellow-500' : 'bg-green-600'}`} 
+                                style={{ width: `${usedPercent}%` }}
+                            ></div>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );

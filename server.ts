@@ -12,6 +12,7 @@ import https from 'https';
 import { pipeline } from 'stream';
 import { promisify } from 'util';
 import rateLimit from 'express-rate-limit';
+import checkDiskSpace from 'check-disk-space';
 
 const streamPipeline = promisify(pipeline);
 
@@ -313,6 +314,18 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
 };
 
 // --- ROUTES ---
+
+app.get('/api/disk', requirePin, async (req, res) => {
+  try {
+    // Check space on the folder where downloads go
+    const space = await checkDiskSpace(DOWNLOAD_ROOT);
+    res.json(space); // Returns { diskPath, free, size }
+  } catch (e: any) {
+    console.error("Disk check error:", e);
+    // Fallback if check fails (e.g. on some OS versions)
+    res.json({ free: 0, size: 0, error: true });
+  }
+});
 
 app.post('/api/download', requirePin, async (req, res) => {
   const { path: sPath, filename: sName, files, owner, folderName } = req.body;
