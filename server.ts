@@ -84,30 +84,35 @@ const registerNode = (owner: string, url: string) => {
 };
 
 const replaceUserFiles = (owner: string, files: MediaFile[]) => {
-  // 1. Prepare the SQL statements once
   const deleteStmt = db.prepare('DELETE FROM media_files WHERE owner = ?');
   const insertStmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
 
-  // 2. Create a "Transaction" (a group of actions that run together)
-  const transaction = db.transaction((filesToInsert: MediaFile[]) => {
-    deleteStmt.run(owner); // Delete old files
-    for (const f of filesToInsert) {
-      // Insert new file
-      insertStmt.run(
-        `${owner}:${f.path}`, 
-        owner, 
-        f.rawFilename, 
-        f.path, 
-        f.library, 
-        f.quality, 
-        f.sizeBytes, 
-        f.lastModified
-      );
-    }
-  });
+  // 1. Delete old files in one go (fast)
+  deleteStmt.run(owner);
 
-  // 3. Run it
-  transaction(files);
+  // 2. Insert new files in small chunks to prevent locking the DB for too long
+  const CHUNK_SIZE = 500;
+  for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+    const chunk = files.slice(i, i + CHUNK_SIZE);
+    
+    // Tiny transaction for this chunk only
+    const transaction = db.transaction((batch) => {
+      for (const f of batch) {
+        insertStmt.run(
+          `${owner}:${f.path}`, 
+          owner, 
+          f.rawFilename, 
+          f.path, 
+          f.library, 
+          f.quality, 
+          f.sizeBytes, 
+          f.lastModified
+        );
+      }
+    });
+    
+    transaction(chunk);
+  }
 };
 
 const updateExternalCache = (files: MediaFile[], nodes: {owner:string, url:string}[]) => {
@@ -159,7 +164,7 @@ try {
 // --- MIDDLEWARE ---
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-app.use(express.static(path.join(__dirname, '../dist')));
+const distPath = path.join(__dirname, '../dist');
 app.set('trust proxy', 1);
 
 const generalLimiter = rateLimit({ windowMs: 15*60*1000, max: 1000 });
@@ -290,6 +295,33 @@ const attemptDownload = (remoteUrl: string, remotePath: string, localPath: strin
 const downloadFile = async (remoteUrl: string, remotePath: string, localPath: string, jobId: string) => {
   if (!DOWNLOAD_ROOT) throw new Error("No Download Root");
   if (!SYNC_SECRET) throw new Error("Missing Sync Secret");
+
+  // --- NEW: PRE-FLIGHT DISK CHECK ---
+  // Get job details to know the total size (if we have it from a previous attempt)
+  const jobInfo = activeDownloads.get(jobId);
+  
+  // Only check if we haven't started (status is pending) to avoid spamming checks
+  if (jobInfo && jobInfo.status === 'pending') {
+     try {
+       const space = await checkDiskSpace(DOWNLOAD_ROOT);
+       // Safety Buffer: Keep at least 500MB free
+       const MIN_FREE_BUFFER = 500 * 1024 * 1024; 
+       
+       // If we know the total size, check it. (Note: TotalBytes might be 0 if new)
+       if (jobInfo.totalBytes > 0 && space.free < (jobInfo.totalBytes - jobInfo.downloadedBytes + MIN_FREE_BUFFER)) {
+          throw new Error(`Insufficient Disk Space (Free: ${formatBytes(space.free)})`);
+       }
+       
+       // If we assume a generic safety check (e.g. stop if < 1GB free regardless)
+       if (space.free < 1 * 1024 * 1024 * 1024) {
+          throw new Error("Disk dangerously low (<1GB). Download prevented.");
+       }
+     } catch (e: any) {
+       // Fail the job immediately
+       activeDownloads.set(jobId, { ...jobInfo, status: 'error', error: e.message });
+       return; 
+     }
+  }
 
   // Skip if already done
   if (fs.existsSync(localPath)) {
@@ -595,9 +627,6 @@ app.get('/api/files', requirePin, (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// Use 'dist' instead of '../dist'
-const distPath = path.join(__dirname, 'dist'); 
 
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
