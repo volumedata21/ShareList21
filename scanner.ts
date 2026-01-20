@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { MediaFile } from './src/types';
+import pLimit from 'p-limit';
 
 // Valid Extensions
 const VALID_EXTS = new Set([
@@ -78,45 +79,45 @@ async function scanDirectory(dir: string): Promise<string[]> {
 }
 
 export async function processFiles(mediaRoot: string, owner: string): Promise<MediaFile[]> {
-  // Ensure we have an absolute path to start with
   const absoluteRoot = path.resolve(mediaRoot);
   console.log(`[Scanner] Starting scan of ${absoluteRoot} for user ${owner}...`);
   
   const filePaths = await scanDirectory(absoluteRoot);
   
-  const processed = await Promise.all(filePaths.map(async (filePath) => {
-    try {
-      const stats = await fs.stat(filePath);
-      
-      // We calculate relative path ONLY to determine the "Library" (e.g. "Movies" vs "TV Shows")
-      const relativePath = path.relative(absoluteRoot, filePath);
-      const filename = path.basename(filePath);
-      
-      // --- QUALITY / 3D DETECTION ---
-      // Default to finding resolution (4k, 1080p, etc)
-      let quality = filename.match(/4k|2160p|1080p|720p|sd/i)?.[0] || '';
-      
-      // Override if 3D markers are found
-      if (/\{edition-3d\}|\.sbs/i.test(filename)) {
-        quality = '3D';
-      }
+  // PERFORMANCE: Use p-limit to process exactly 50 files at a time.
+  // This is a "Sliding Window" - as soon as one finishes, the next starts.
+  // It is much faster than chunking and safe for memory.
+  const limit = pLimit(50);
 
-      const file: MediaFile = {
-        rawFilename: filename,
-        // CHANGED: Store the FULL path so the server can serve/download it later
-        path: filePath, 
-        // Library is the top-level folder name (e.g. "Movies")
-        library: relativePath.split(path.sep)[0] || 'Root',
-        quality: quality,
-        owner: owner,
-        sizeBytes: stats.size,
-        lastModified: stats.mtimeMs
-      };
-      return file;
-    } catch (e) { return null; }
-  }));
+  const tasks = filePaths.map((filePath) => {
+    return limit(async () => {
+      try {
+        const stats = await fs.stat(filePath);
+        const relativePath = path.relative(absoluteRoot, filePath);
+        const filename = path.basename(filePath);
+        
+        // Quality Detection
+        let quality = filename.match(/4k|2160p|1080p|720p|sd/i)?.[0] || '';
+        if (/\{edition-3d\}|\.sbs/i.test(filename)) {
+          quality = '3D';
+        }
 
-  const validFiles = processed.filter((f): f is MediaFile => f !== null);
+        return {
+          rawFilename: filename,
+          path: filePath,
+          library: relativePath.split(path.sep)[0] || 'Root',
+          quality: quality,
+          owner: owner,
+          sizeBytes: stats.size,
+          lastModified: stats.mtimeMs
+        } as MediaFile;
+      } catch (e) { return null; }
+    });
+  });
+
+  const results = await Promise.all(tasks);
+  const validFiles = results.filter((f): f is MediaFile => f !== null);
+
   console.log(`[Scanner] Found ${validFiles.length} valid media files.`);
   return validFiles;
 }
