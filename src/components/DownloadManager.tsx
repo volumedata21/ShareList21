@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { formatBytes } from '../utils/mediaUtils';
-import { DownloadStatus } from '../types';
-import { UploadStatus } from '../App';
+import { DownloadStatus, UploadStatus } from '../types';
 
 interface DownloadManagerProps {
     isOpen: boolean;

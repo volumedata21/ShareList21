@@ -1,21 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { MediaItem, MediaFile, FilterType, AppConfig, DownloadStatus } from './types';
+import { MediaItem, MediaFile, FilterType, AppConfig, DownloadStatus, UploadStatus } from './types';
 import { fuzzyMatch, cleanName, getMediaType, getSeriesName, getMusicMetadata, formatBytes } from './utils/mediaUtils';
 import MediaList from './components/MediaList';
 import MediaDetail from './components/MediaDetail';
 import DownloadManager from './components/DownloadManager';
 import StatsModal from './components/StatsModal';
 import { useToast } from './components/ToastContext';
-
-export interface UploadStatus {
-  id: string;
-  filename: string;
-  user: string;
-  transferredBytes: number;
-  totalBytes: number;
-  speed: number;
-  startTime: number;
-}
 
 // Structure for tracking active downloads in the UI
 

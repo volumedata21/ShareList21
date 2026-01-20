@@ -32,7 +32,6 @@ export interface SyncPayload {
   files: MediaFile[];
 }
 
-// NEW: The Master Definition
 export interface DownloadStatus {
   id: string;
   filename: string;
@@ -42,4 +41,14 @@ export interface DownloadStatus {
   speed?: number;
   error?: string;
   remotePath?: string;
+}
+
+export interface UploadStatus {
+  id: string;
+  filename: string;
+  user: string;
+  transferredBytes: number;
+  totalBytes: number;
+  speed: number;
+  startTime: number;
 }
