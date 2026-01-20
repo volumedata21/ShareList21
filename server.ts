@@ -531,6 +531,23 @@ app.get('/api/downloads', requirePin, (req, res) => {
 // --- STANDARD API ---
 app.get('/api/config', (req, res) => res.json({ users: ALLOWED_USERS, requiresPin: !!APP_PIN, hostUser: HOST_USER, canDownload: fs.existsSync(DOWNLOAD_ROOT) }));
 
+app.post('/api/test-connection', requirePin, async (req, res) => {
+  try {
+    // If this server has a Master URL, try to ping it
+    if (MASTER_URL) {
+       const response = await fetch(`${MASTER_URL}/api/config`);
+       if (!response.ok) throw new Error(`Master responded with ${response.status}`);
+       return res.json({ success: true, message: "Connection to Master verified." });
+    }
+    
+    // If this is a Host (no Master URL), just reply successfully
+    res.json({ success: true, message: "Server is online." });
+  } catch (e: any) {
+    console.error("Test connection failed:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/serve', requireSecret, (req, res) => {
   const p = req.query.path as string;
   if (!p) return res.status(400).send('Missing path');
