@@ -406,6 +406,30 @@ app.get('/api/disk', requirePin, async (req, res) => {
   }
 });
 
+app.get('/api/inventory', requirePin, async (req, res) => {
+  try {
+    if (!DOWNLOAD_ROOT || !fs.existsSync(DOWNLOAD_ROOT)) {
+      return res.json({ complete: [], partials: [] });
+    }
+
+    const files = await fs.promises.readdir(DOWNLOAD_ROOT);
+    
+    // Identify .part files vs completed files
+    const partials = files
+      .filter(f => f.endsWith('.part'))
+      .map(f => f.replace('.part', '')); // Remove extension to get base name
+      
+    const complete = files
+      .filter(f => !f.endsWith('.part'));
+
+    res.json({ complete, partials });
+  } catch (e: any) {
+    console.error("Inventory check failed:", e);
+    // Return empty lists on error so frontend doesn't crash
+    res.json({ complete: [], partials: [] });
+  }
+});
+
 app.get('/api/scan-status', requirePin, (req, res) => {
   res.json(globalScanStatus);
 });
