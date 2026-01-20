@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { formatBytes } from '../utils/mediaUtils';
-import { DownloadStatus, UploadStatus } from '../types';
+import { DownloadStatus, UploadStatus } from '../types'; 
 
 interface DownloadManagerProps {
     isOpen: boolean;
@@ -48,6 +48,7 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin,
         const interval = setInterval(fetchDisk, 5000); // Check disk every 5s is enough
         return () => clearInterval(interval);
     }, [isOpen, pin]);
+
     const handleCancel = async (id: string) => {
         await fetch('/api/download/cancel', {
             method: 'POST',
@@ -69,7 +70,7 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin,
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-app-pin': pin }
         });
-        setDownloads(prev => prev.filter(d => d.status === 'downloading' || d.status === 'pending'));
+        // Optimistic UI update handled by parent prop updates
     };
 
     if (!isOpen) return null;
@@ -128,9 +129,6 @@ const DownloadManager: React.FC<DownloadManagerProps> = ({ isOpen, onClose, pin,
                                 <div className="text-center text-gray-500 py-10">No active downloads</div>
                             ) : (
                                 downloads.map(item => {
-                                    /* ... EXISTING DOWNLOAD CARD CODE ... */
-                                    /* Paste your original Download Card Logic here. */
-                                    /* I will include it below for completeness */
                                     const isError = item.status === 'error';
                                     const isCancelled = item.status === 'cancelled';
                                     const isDone = item.status === 'completed' || item.status === 'skipped';
