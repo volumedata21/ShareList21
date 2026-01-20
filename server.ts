@@ -177,49 +177,33 @@ const requireSecret = async (req: Request, res: Response, next: NextFunction) =>
 // 1. Supports Resume (.part files)
 // 2. Supports Stall Detection (30s timeout)
 // 3. Checks for HTML errors
-const downloadFile = async (remoteUrl: string, remotePath: string, localPath: string, jobId: string) => {
-  if (!DOWNLOAD_ROOT) throw new Error("No Download Root");
-  if (!SYNC_SECRET) throw new Error("Missing Sync Secret");
+// --- ROBUST DOWNLOAD LOGIC ---
 
-  // Skip if already done
-  if (fs.existsSync(localPath)) {
-    const job = activeDownloads.get(jobId);
-    if (job) activeDownloads.set(jobId, { ...job, status: 'skipped', speed: 0 });
-    return;
-  }
-
+// Helper: Tries to download ONCE. Returns promise.
+const attemptDownload = (remoteUrl: string, remotePath: string, localPath: string, jobId: string, signal: AbortSignal) => {
   const cleanBaseUrl = remoteUrl.replace(/\/$/, '');
   const encodedPath = encodeURIComponent(remotePath);
   const downloadUrl = `${cleanBaseUrl}/api/serve?path=${encodedPath}`;
   const partPath = `${localPath}.part`;
-  const ensureDir = (dir: string) => { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); };
 
-  ensureDir(path.dirname(localPath));
-
-  // Resume Logic
+  // Resume Logic: Check how much we have
   let startByte = 0;
   if (fs.existsSync(partPath)) {
     try { startByte = fs.statSync(partPath).size; } catch (e) { startByte = 0; }
   }
-
-  const controller = new AbortController();
-  const { signal } = controller;
-
-  const current = activeDownloads.get(jobId);
-  if (current) activeDownloads.set(jobId, { ...current, status: 'downloading', abortController: controller });
 
   return new Promise<void>((resolve, reject) => {
     const isHttps = downloadUrl.startsWith('https');
     const lib = isHttps ? https : http;
     const agent = isHttps ? httpsAgent : httpAgent;
 
-    // Stall Detection
+    // Manual Stall Detection
     let lastActivity = Date.now();
     const stallInterval = setInterval(() => {
-      if (Date.now() - lastActivity > 30000) {
+      if (signal.aborted) { clearInterval(stallInterval); return; }
+      if (Date.now() - lastActivity > 45000) { // Increased to 45s for stability
         clearInterval(stallInterval);
-        controller.abort();
-        reject(new Error("Stalled"));
+        reject(new Error("Stalled (No data for 45s)"));
       }
     }, 5000);
 
@@ -231,34 +215,28 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
       },
       signal
     }, (response) => {
-      // Status Check
       if (response.statusCode !== 200 && response.statusCode !== 206) {
         clearInterval(stallInterval);
-        const err = new Error(`Status ${response.statusCode}`);
-        if (activeDownloads.has(jobId)) activeDownloads.set(jobId, { ...activeDownloads.get(jobId)!, status: 'error', error: err.message });
-        reject(err);
+        reject(new Error(`HTTP Status ${response.statusCode}`));
         return;
       }
 
-      // HTML Check (From your new file)
       if ((response.headers['content-type'] || '').includes('text/html')) {
         clearInterval(stallInterval);
-        const err = new Error("Remote sent HTML");
-        if (activeDownloads.has(jobId)) activeDownloads.set(jobId, { ...activeDownloads.get(jobId)!, status: 'error', error: err.message });
-        reject(err);
+        reject(new Error("Remote sent HTML (Auth error?)"));
         return;
       }
 
       const contentLength = parseInt(response.headers['content-length'] || '0', 10);
       const totalSize = startByte + contentLength;
 
-      if (activeDownloads.has(jobId)) {
-        const j = activeDownloads.get(jobId)!;
-        j.totalBytes = totalSize;
-        j.downloadedBytes = startByte;
+      // Update Total Size in UI
+      const job = activeDownloads.get(jobId);
+      if (job) {
+         job.totalBytes = totalSize;
+         job.downloadedBytes = startByte;
       }
 
-      // Stream to .part file
       const fileStream = fs.createWriteStream(partPath, { flags: startByte > 0 ? 'a' : 'w' });
       
       let lastTime = Date.now();
@@ -269,9 +247,11 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
         const j = activeDownloads.get(jobId);
         if (j) {
           j.downloadedBytes += chunk.length;
+          // Calculate Speed
           const now = Date.now();
           if (now - lastTime > 1000) {
-             j.speed = Math.floor((j.downloadedBytes - lastBytes) / ((now - lastTime)/1000));
+             const seconds = (now - lastTime) / 1000;
+             j.speed = Math.floor((j.downloadedBytes - lastBytes) / seconds);
              lastTime = now;
              lastBytes = j.downloadedBytes;
           }
@@ -281,36 +261,93 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
       streamPipeline(response, fileStream)
         .then(() => {
           clearInterval(stallInterval);
-          fs.renameSync(partPath, localPath); // Success: Rename part to final
-          const j = activeDownloads.get(jobId);
-          if (j) activeDownloads.set(jobId, { ...j, status: 'completed', speed: 0 });
           resolve();
         })
         .catch(err => {
           clearInterval(stallInterval);
-          if (err.code === 'ABORT_ERR' || err.name === 'AbortError') {
-             // If user cancelled, status is already 'cancelled', don't error
-             const j = activeDownloads.get(jobId);
-             if (j && j.status !== 'cancelled') {
-                 activeDownloads.set(jobId, { ...j, status: 'error', error: 'Timed Out' });
-             }
-             resolve(); // Safe resolve
-          } else {
-             const j = activeDownloads.get(jobId);
-             if (j) activeDownloads.set(jobId, { ...j, status: 'error', error: err.message });
-             resolve(); // Safe resolve to keep loop running
-          }
+          reject(err);
         });
     });
 
     req.on('error', err => {
         clearInterval(stallInterval);
-        if (err.name === 'AbortError') return;
-        const j = activeDownloads.get(jobId);
-        if (j) activeDownloads.set(jobId, { ...j, status: 'error', error: err.message });
-        resolve(); 
+        reject(err);
     });
   });
+};
+
+// Main Worker: Handles Retries and Loops
+const downloadFile = async (remoteUrl: string, remotePath: string, localPath: string, jobId: string) => {
+  if (!DOWNLOAD_ROOT) throw new Error("No Download Root");
+  if (!SYNC_SECRET) throw new Error("Missing Sync Secret");
+
+  // Skip if already done
+  if (fs.existsSync(localPath)) {
+    const job = activeDownloads.get(jobId);
+    if (job) activeDownloads.set(jobId, { ...job, status: 'skipped', speed: 0 });
+    return;
+  }
+
+  // Ensure directory exists
+  const dir = path.dirname(localPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  const controller = new AbortController();
+  const activeJob = activeDownloads.get(jobId);
+  if (activeJob) {
+      activeJob.status = 'downloading';
+      activeJob.abortController = controller;
+  }
+
+  const MAX_RETRIES = 5;
+  let attempt = 0;
+
+  while (attempt < MAX_RETRIES) {
+    attempt++;
+    try {
+       await attemptDownload(remoteUrl, remotePath, localPath, jobId, controller.signal);
+       
+       // SUCCESS! Rename .part to actual file
+       const partPath = `${localPath}.part`;
+       if (fs.existsSync(partPath)) fs.renameSync(partPath, localPath);
+       
+       const finalJob = activeDownloads.get(jobId);
+       if (finalJob) activeDownloads.set(jobId, { ...finalJob, status: 'completed', speed: 0 });
+       return;
+
+    } catch (e: any) {
+       // Check if user cancelled manually
+       const currentJob = activeDownloads.get(jobId);
+       if (!currentJob || currentJob.status === 'cancelled') return;
+
+       // If "AbortError", it was likely a timeout or manual cancel
+       if (e.name === 'AbortError') return;
+
+       console.error(`[Download] Attempt ${attempt} failed: ${e.message}`);
+
+       if (attempt >= MAX_RETRIES) {
+          // Failed after all retries
+          activeDownloads.set(jobId, { ...currentJob, status: 'error', error: e.message });
+          throw e;
+       } else {
+          // WAIT AND RETRY
+          // Exponential backoff: 2s, 5s, 10s...
+          const waitTime = Math.min(2000 * Math.pow(2.5, attempt - 1), 30000);
+          activeDownloads.set(jobId, { 
+             ...currentJob, 
+             error: `Retrying in ${Math.ceil(waitTime/1000)}s... (${e.message})` 
+          });
+          
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          
+          // Reset status to downloading for next attempt
+          const retryJob = activeDownloads.get(jobId);
+          if (retryJob && retryJob.status !== 'cancelled') {
+             activeDownloads.set(jobId, { ...retryJob, status: 'downloading', error: undefined });
+          }
+       }
+    }
+  }
 };
 
 // --- ROUTES ---
