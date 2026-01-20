@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { FixedSizeList as List } from 'react-window';
+import AutoSizer from 'react-virtualized-auto-sizer';
 import { MediaItem, AppConfig } from '../types';
 import { get3DFormat, get4KFormat, is4KQualityString, getMusicMetadata, getAudioFormat, getRemuxFormat } from '../utils/mediaUtils';
 
@@ -63,6 +65,183 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
     });
   };
 
+  // --- THE NEW VIRTUAL ROW COMPONENT ---
+  // This function draws ONE single row. React-Window calls this thousands of times efficiently.
+  const Row = ({ index, style }: { index: number; style: React.CSSProperties }) => {
+    const item = displayedItems[index];
+    if (!item) return null;
+
+    const versionCount = item.files.length;
+    const is4K = item.files.some(f => get4KFormat(f.rawFilename));
+    
+    // --- MULTI-REMUX BADGE LOGIC ---
+    const allRemuxes = item.files
+        .filter(f => getRemuxFormat(f.rawFilename) !== null)
+        .map(f => ({
+            label: getRemuxFormat(f.rawFilename)!,
+            is4K: get4KFormat(f.rawFilename)
+        }));
+
+    const uniqueRemuxes: { label: string, is4K: boolean }[] = [];
+    const seenRemux = new Set<string>();
+    allRemuxes.forEach(r => {
+        const key = `${r.label}-${r.is4K}`;
+        if (!seenRemux.has(key)) {
+            seenRemux.add(key);
+            uniqueRemuxes.push(r);
+        }
+    });
+
+    const has4KRemux = uniqueRemuxes.some(r => r.is4K);
+
+    // --- CLEANING LOGIC ---
+    const editionMatch = item.name.match(/\{edition-([^}]+)\}/i);
+    const editionName = editionMatch ? editionMatch[1] : null;
+
+    let cleanTitle = item.name
+        .replace(/\.[^/.]+$/, "") 
+        .replace(/\{edition-[^}]+\}/i, '') 
+        .trim();
+
+    const yearMatch = cleanTitle.match(/^(.*?\(\d{4}\))/);
+    if (yearMatch) {
+        cleanTitle = yearMatch[1];
+    }
+
+    const qualities = Array.from(new Set(
+      item.files
+        .map(f => item.type === 'Music' ? getAudioFormat(f.rawFilename) : f.quality)
+        .filter((q): q is string => {
+            if (typeof q !== 'string' || q.trim().length === 0) return false;
+            if (is4KQualityString(q)) return false;
+            if (uniqueRemuxes.length > 0 && (q === '1080p' || q === '1080i')) return false;
+            return true;
+        })
+    )).slice(0, 3);
+    
+    const owners = Array.from(new Set(item.files.map(f => f.owner))).sort();
+    const is3D = item.files.some(f => get3DFormat(f.rawFilename));
+
+    let albumCount = 0;
+    let isAlbumView = false;
+    let artistName = "";
+    
+    if (item.type === 'Music') {
+      const albums = new Set(item.files.map(f => getMusicMetadata(f.path).album));
+      albumCount = albums.size;
+      const firstAlbum = albums.values().next().value;
+      if (albumCount === 1 && item.name === firstAlbum) {
+         isAlbumView = true;
+         artistName = getMusicMetadata(item.files[0].path).artist;
+      }
+    }
+
+    const isMissingItem = hostUser && !owners.includes(hostUser);
+    
+    let cardStyle = "";
+    if (selectedId === item.id) {
+        cardStyle = "bg-gray-800 border-plex-orange text-white shadow-lg z-10";
+    } else if (isMissingItem) {
+        cardStyle = "bg-gray-800/40 border-transparent text-gray-400 hover:bg-gray-800/60";
+    } else {
+        cardStyle = "bg-gray-800 border-transparent text-gray-200 hover:bg-gray-700";
+    }
+
+    // IMPORTANT: We must apply the 'style' prop to the outer div, but we add some margin
+    // by using an inner div, because 'react-window' uses absolute positioning.
+    return (
+      <div style={style} className="px-4 py-1">
+        <button
+          onClick={() => onSelect(item)}
+          className={`w-full h-full flex items-center p-3 rounded-lg text-left transition-all duration-200 group border ${cardStyle}`}
+        >
+          <div className={`p-2 rounded-full mr-4 ${selectedId === item.id ? 'bg-white/20' : 'bg-gray-700 group-hover:bg-gray-600'}`}>
+            {getIcon(item.type, isAlbumView)}
+          </div>
+          
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm font-semibold flex items-center gap-2 overflow-hidden">
+              <span className="flex items-center gap-1 truncate">
+                  {renderName(cleanTitle, selectedId === item.id)}
+              </span>
+              
+              {editionName && (
+                 <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap flex-none
+                   ${selectedId === item.id 
+                     ? 'border-cyan-300 bg-cyan-600 text-white' 
+                     : 'border-cyan-500 text-cyan-300 bg-cyan-900/40 shadow-[0_0_8px_rgba(34,211,238,0.3)]'}`}>
+                   {editionName}
+                 </span>
+              )}
+
+              {isAlbumView && (
+                <span className={`text-xs font-normal truncate ${selectedId === item.id ? 'text-white/70' : 'text-gray-500'}`}>
+                  by {artistName}
+                </span>
+              )}
+            </h3>
+            
+            <div className="flex items-center gap-1 mt-0.5">
+               <svg className={`w-3 h-3 ${selectedId === item.id ? 'text-green-300' : 'text-green-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+               </svg>
+               <p className={`text-xs truncate font-bold ${selectedId === item.id ? 'text-green-100' : 'text-green-400'}`}>
+                 {owners.join(', ')}
+               </p>
+            </div>
+
+            <p className={`text-[10px] truncate flex gap-2 mt-0.5 ${selectedId === item.id ? 'text-white/60' : 'text-gray-500'}`}>
+              <span>{item.type}</span>
+              {item.type === 'TV Show' && <span>• {versionCount} Ep/Files</span>}
+              {item.type === 'Music' && <span>• {isAlbumView ? 'Album' : `${albumCount} Albums`}</span>}
+              {item.type !== 'TV Show' && item.type !== 'Music' && versionCount > 1 && (
+                <span className="font-bold">• {versionCount} Versions</span>
+              )}
+            </p>
+          </div>
+
+          <div className="flex flex-row items-center ml-2 gap-1">
+            
+            {/* MULTI-REMUX TAGS */}
+            {uniqueRemuxes.map((badge, idx) => (
+              <span key={idx} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm 
+                  ${badge.is4K 
+                      ? (selectedId === item.id ? 'border-purple-300 bg-purple-600 text-white' : 'border-purple-500 text-purple-300 bg-purple-900/40')
+                      : (selectedId === item.id ? 'border-blue-300 bg-blue-600 text-white' : 'border-blue-500 text-blue-300 bg-blue-900/40')
+                  }`}>
+                  {badge.label}
+              </span>
+            ))}
+
+            {is4K && !has4KRemux && (
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-black/20 bg-black/20 text-white' : 'border-plex-orange bg-plex-orange text-black'}`}>4K UHD</span>
+            )}
+            
+            {is3D && (
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap 
+                  ${selectedId === item.id 
+                      ? 'border-emerald-300 bg-emerald-600 text-white' 
+                      : 'border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]'}`}>
+                  3D
+              </span>
+            )}
+
+            {qualities.map((q, i) => {
+              const isFlac = q.toUpperCase() === 'FLAC';
+              const defaultStyle = selectedId === item.id ? 'border-white/40 bg-white/10' : 'border-gray-600 bg-gray-700 text-gray-400';
+              const flacStyle = selectedId === item.id ? 'border-yellow-300 bg-yellow-600 text-white' : 'border-yellow-500 text-yellow-400 bg-yellow-900/40';
+              return (
+                <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${isFlac ? flacStyle : defaultStyle}`}>
+                  {q}
+                </span>
+              );
+            })}
+          </div>
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full bg-gray-900 overflow-hidden">
       
@@ -100,183 +279,27 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
         )}
       </div>
 
-      {/* LIST CONTENT */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-2 custom-scrollbar">
+      {/* LIST CONTENT - VIRTUALIZED */}
+      <div className="flex-1 min-h-0 custom-scrollbar">
         {displayedItems.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-gray-500">
              <p>No media found.</p>
              {missingOnly && <p className="text-xs mt-1">Try turning off 'Missing' filter.</p>}
           </div>
         ) : (
-          displayedItems.map((item) => {
-            const versionCount = item.files.length;
-            const is4K = item.files.some(f => get4KFormat(f.rawFilename));
-            
-            // --- MULTI-REMUX BADGE LOGIC ---
-            const allRemuxes = item.files
-                .filter(f => getRemuxFormat(f.rawFilename) !== null)
-                .map(f => ({
-                    label: getRemuxFormat(f.rawFilename)!,
-                    is4K: get4KFormat(f.rawFilename)
-                }));
-
-            const uniqueRemuxes: { label: string, is4K: boolean }[] = [];
-            const seenRemux = new Set<string>();
-            allRemuxes.forEach(r => {
-                const key = `${r.label}-${r.is4K}`;
-                if (!seenRemux.has(key)) {
-                    seenRemux.add(key);
-                    uniqueRemuxes.push(r);
-                }
-            });
-
-            const has4KRemux = uniqueRemuxes.some(r => r.is4K);
-
-            // --- CLEANING LOGIC ---
-            const editionMatch = item.name.match(/\{edition-([^}]+)\}/i);
-            const editionName = editionMatch ? editionMatch[1] : null;
-
-            let cleanTitle = item.name
-                .replace(/\.[^/.]+$/, "") 
-                .replace(/\{edition-[^}]+\}/i, '') 
-                .trim();
-
-            const yearMatch = cleanTitle.match(/^(.*?\(\d{4}\))/);
-            if (yearMatch) {
-                cleanTitle = yearMatch[1];
-            }
-
-            const qualities = Array.from(new Set(
-              item.files
-                .map(f => item.type === 'Music' ? getAudioFormat(f.rawFilename) : f.quality)
-                .filter((q): q is string => {
-                    if (typeof q !== 'string' || q.trim().length === 0) return false;
-                    if (is4KQualityString(q)) return false;
-                    if (uniqueRemuxes.length > 0 && (q === '1080p' || q === '1080i')) return false;
-                    return true;
-                })
-            )).slice(0, 3);
-            
-            const owners = Array.from(new Set(item.files.map(f => f.owner))).sort();
-            const is3D = item.files.some(f => get3DFormat(f.rawFilename));
-
-            let albumCount = 0;
-            let isAlbumView = false;
-            let artistName = "";
-            
-            if (item.type === 'Music') {
-              const albums = new Set(item.files.map(f => getMusicMetadata(f.path).album));
-              albumCount = albums.size;
-              const firstAlbum = albums.values().next().value;
-              if (albumCount === 1 && item.name === firstAlbum) {
-                 isAlbumView = true;
-                 artistName = getMusicMetadata(item.files[0].path).artist;
-              }
-            }
-
-            const isMissingItem = hostUser && !owners.includes(hostUser);
-            
-            let cardStyle = "";
-            
-            if (selectedId === item.id) {
-                cardStyle = "bg-gray-800 border-plex-orange text-white shadow-lg scale-[1.01] z-10";
-            } else if (isMissingItem) {
-                cardStyle = "bg-gray-800/40 border-transparent text-gray-400 hover:bg-gray-800/60";
-            } else {
-                cardStyle = "bg-gray-800 border-transparent text-gray-200 hover:bg-gray-700";
-            }
-
-            return (
-              <button
-                key={item.id}
-                onClick={() => onSelect(item)}
-                className={`w-full flex items-center p-3 rounded-lg text-left transition-all duration-200 group border ${cardStyle}`}
+          <AutoSizer>
+            {({ height, width }) => (
+              <List
+                height={height}
+                width={width}
+                itemCount={displayedItems.length}
+                itemSize={84} // 84px height per row
+                className="custom-scrollbar"
               >
-                <div className={`p-2 rounded-full mr-4 ${selectedId === item.id ? 'bg-white/20' : 'bg-gray-700 group-hover:bg-gray-600'}`}>
-                  {getIcon(item.type, isAlbumView)}
-                </div>
-                
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold flex items-center gap-2 overflow-hidden">
-                    <span className="flex items-center gap-1 truncate">
-                        {renderName(cleanTitle, selectedId === item.id)}
-                    </span>
-                    
-                    {editionName && (
-                       <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap flex-none
-                         ${selectedId === item.id 
-                           ? 'border-cyan-300 bg-cyan-600 text-white' 
-                           : 'border-cyan-500 text-cyan-300 bg-cyan-900/40 shadow-[0_0_8px_rgba(34,211,238,0.3)]'}`}>
-                         {editionName}
-                       </span>
-                    )}
-
-                    {isAlbumView && (
-                      <span className={`text-xs font-normal truncate ${selectedId === item.id ? 'text-white/70' : 'text-gray-500'}`}>
-                        by {artistName}
-                      </span>
-                    )}
-                  </h3>
-                  
-                  <div className="flex items-center gap-1 mt-0.5">
-                     <svg className={`w-3 h-3 ${selectedId === item.id ? 'text-green-300' : 'text-green-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                     </svg>
-                     <p className={`text-xs truncate font-bold ${selectedId === item.id ? 'text-green-100' : 'text-green-400'}`}>
-                       {owners.join(', ')}
-                     </p>
-                  </div>
-
-                  <p className={`text-[10px] truncate flex gap-2 mt-0.5 ${selectedId === item.id ? 'text-white/60' : 'text-gray-500'}`}>
-                    <span>{item.type}</span>
-                    {item.type === 'TV Show' && <span>• {versionCount} Ep/Files</span>}
-                    {item.type === 'Music' && <span>• {isAlbumView ? 'Album' : `${albumCount} Albums`}</span>}
-                    {item.type !== 'TV Show' && item.type !== 'Music' && versionCount > 1 && (
-                      <span className="font-bold">• {versionCount} Versions</span>
-                    )}
-                  </p>
-                </div>
-
-                <div className="flex flex-row items-center ml-2 gap-1">
-                  
-                  {/* MULTI-REMUX TAGS */}
-                  {uniqueRemuxes.map((badge, idx) => (
-                    <span key={idx} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm 
-                        ${badge.is4K 
-                            ? (selectedId === item.id ? 'border-purple-300 bg-purple-600 text-white' : 'border-purple-500 text-purple-300 bg-purple-900/40')
-                            : (selectedId === item.id ? 'border-blue-300 bg-blue-600 text-white' : 'border-blue-500 text-blue-300 bg-blue-900/40')
-                        }`}>
-                        {badge.label}
-                    </span>
-                  ))}
-
-                  {is4K && !has4KRemux && (
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-black/20 bg-black/20 text-white' : 'border-plex-orange bg-plex-orange text-black'}`}>4K UHD</span>
-                  )}
-                  
-                  {is3D && (
-                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap 
-                        ${selectedId === item.id 
-                            ? 'border-emerald-300 bg-emerald-600 text-white' 
-                            : 'border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]'}`}>
-                        3D
-                    </span>
-                  )}
-
-                  {qualities.map((q, i) => {
-                    const isFlac = q.toUpperCase() === 'FLAC';
-                    const defaultStyle = selectedId === item.id ? 'border-white/40 bg-white/10' : 'border-gray-600 bg-gray-700 text-gray-400';
-                    const flacStyle = selectedId === item.id ? 'border-yellow-300 bg-yellow-600 text-white' : 'border-yellow-500 text-yellow-400 bg-yellow-900/40';
-                    return (
-                      <span key={i} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${isFlac ? flacStyle : defaultStyle}`}>
-                        {q}
-                      </span>
-                    );
-                  })}
-                </div>
-              </button>
-            );
-          })
+                {Row}
+              </List>
+            )}
+          </AutoSizer>
         )}
       </div>
     </div>

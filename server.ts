@@ -493,3 +493,5 @@ if (fs.existsSync(distPath)) {
   // Fallback for Dev Mode (so it doesn't crash)
   app.get('/', (req, res) => res.send('Server running. For development, use port 5173.'));
 }
+
+app.listen(PORT, '0.0.0.0', () => console.log(`ShareList21 running on ${PORT}`));
