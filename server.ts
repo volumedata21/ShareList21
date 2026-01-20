@@ -67,6 +67,16 @@ interface DownloadStatus {
 const activeDownloads = new Map<string, DownloadStatus>();
 const generateId = () => Math.random().toString(36).substring(2, 9);
 
+// NEW: Global Scan State
+let globalScanStatus = {
+  isRunning: false,
+  step: 'Idle',
+  localFiles: 0,
+  newLocal: 0,
+  remoteSummary: [] as string[],
+  error: null as string | null
+};
+
 // --- DB HELPERS ---
 const registerNode = (owner: string, url: string) => {
   const stmt = db.prepare(`INSERT INTO nodes (owner, url) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET url=excluded.url`);
@@ -364,6 +374,10 @@ app.get('/api/disk', requirePin, async (req, res) => {
   }
 });
 
+app.get('/api/scan-status', requirePin, (req, res) => {
+  res.json(globalScanStatus);
+});
+
 app.post('/api/download', requirePin, async (req, res) => {
   const { path: sPath, filename: sName, files, owner, folderName } = req.body;
   let queue: { remotePath: string, filename: string }[] = [];
@@ -490,19 +504,72 @@ app.get('/api/serve', requireSecret, (req, res) => {
   }
 });
 
-app.post('/api/scan', requirePin, async (req, res) => {
-  try {
-    const files = await processFiles(MEDIA_ROOT, HOST_USER);
-    if (MASTER_URL) {
-      await fetch(`${MASTER_URL}/api/sync`, { method: 'POST', headers: {'Content-Type':'application/json','x-sync-secret':SYNC_SECRET||''}, body: JSON.stringify({owner:HOST_USER, url:NODE_URL, files})});
-      const r = await fetch(`${MASTER_URL}/api/files`, { headers: {'x-app-pin':APP_PIN||''} });
-      const d = await r.json();
-      if (d.files) await updateExternalCache(d.files, d.nodes);
-    } else {
-      await replaceUserFiles(HOST_USER, files);
+app.post('/api/scan', requirePin, (req, res) => {
+  // 1. Immediate Check: Is a scan already running?
+  if (globalScanStatus.isRunning) {
+    return res.status(409).json({ error: 'Scan already in progress' });
+  }
+
+  // 2. Reset Status
+  globalScanStatus = { 
+    isRunning: true, 
+    step: 'Starting...', 
+    localFiles: 0, 
+    newLocal: 0, 
+    remoteSummary: [], 
+    error: null 
+  };
+  
+  // 3. Respond IMMEDIATELY to the browser (The fix!)
+  res.json({ success: true, message: "Scan started in background" });
+
+  // 4. Start the heavy work in the background (Async)
+  (async () => {
+    try {
+      globalScanStatus.step = 'Scanning Local Files...';
+      
+      // Run the scanner
+      const files = await processFiles(MEDIA_ROOT, HOST_USER);
+      globalScanStatus.localFiles = files.length;
+      
+      // Database Update
+      globalScanStatus.step = 'Updating Database...';
+      
+      if (MASTER_URL) {
+        // Satellite Mode: Sync to Master
+        globalScanStatus.step = 'Syncing to Master...';
+        
+        // Chunking logic for large libraries (prevents payload errors)
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+           const chunk = files.slice(i, i + CHUNK_SIZE);
+           await fetch(`${MASTER_URL}/api/sync`, { 
+              method: 'POST', 
+              headers: {'Content-Type':'application/json','x-sync-secret':SYNC_SECRET||''}, 
+              body: JSON.stringify({owner:HOST_USER, url:NODE_URL, files: chunk})
+           });
+        }
+        
+        // Fetch updates from Master
+        const r = await fetch(`${MASTER_URL}/api/files`, { headers: {'x-app-pin':APP_PIN||''} });
+        const d = await r.json();
+        if (d.files) await updateExternalCache(d.files, d.nodes);
+        globalScanStatus.remoteSummary.push("Sync completed");
+      } else {
+        // Standalone Mode: Local DB Update
+        await replaceUserFiles(HOST_USER, files);
+      }
+      
+      globalScanStatus.step = 'Complete';
+    } catch (e: any) {
+      console.error("Scan error:", e);
+      globalScanStatus.error = e.message;
+      globalScanStatus.step = 'Error';
+    } finally {
+      // Mark as finished
+      globalScanStatus.isRunning = false;
     }
-    res.json({ success: true, count: files.length });
-  } catch (e: any) { res.status(500).json({ error: e.message }); }
+  })();
 });
 
 app.get('/api/files', requirePin, (req, res) => {

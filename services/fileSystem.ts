@@ -6,6 +6,9 @@ const generateId = () => Math.random().toString(36).substr(2, 9);
 /**
  * Scans a directory handle (Client-side)
  */
+/**
+ * Scans a directory handle (Client-side)
+ */
 export async function scanDirectory(
   dirHandle: FileSystemDirectoryHandle, 
   onProgress?: (count: number) => void
@@ -14,33 +17,52 @@ export async function scanDirectory(
   let count = 0;
 
   async function traverse(handle: FileSystemDirectoryHandle, pathSegments: string[]) {
+    // We use an array of promises to process a folder in parallel
+    const promises: Promise<void>[] = [];
+
     for await (const entry of handle.values()) {
       if (entry.kind === 'file') {
         if (isMediaFile(entry.name)) {
-          const library = parseLibraryName(pathSegments);
-          const quality = parseQuality(entry.name);
-          
-          mediaFiles.push({
-            id: generateId(),
-            rawFilename: entry.name,
-            path: [...pathSegments, entry.name].join('/'),
-            library,
-            quality,
-            owner: 'Local Browser', // Temp, will be overwritten by sync
-            handle: entry as FileSystemFileHandle,
-          });
-          
-          count++;
-          if (onProgress && count % 50 === 0) {
-            onProgress(count);
-          }
+          // Wrap file processing in a promise
+          const processFile = async () => {
+            try {
+              // CRITICAL FIX: Retrieve the actual File object to get metadata
+              const fileData = await (entry as FileSystemFileHandle).getFile();
+              
+              const library = parseLibraryName(pathSegments);
+              const quality = parseQuality(entry.name);
+              
+              mediaFiles.push({
+                id: generateId(),
+                rawFilename: entry.name,
+                path: [...pathSegments, entry.name].join('/'),
+                library,
+                quality,
+                owner: 'Local Browser',
+                sizeBytes: fileData.size,        // Now correctly populated
+                lastModified: fileData.lastModified, // Now correctly populated
+                handle: entry as FileSystemFileHandle,
+              });
+              
+              count++;
+              if (onProgress && count % 50 === 0) {
+                onProgress(count);
+              }
+            } catch (err) {
+              console.warn(`Could not read file ${entry.name}`, err);
+            }
+          };
+          promises.push(processFile());
         }
       } else if (entry.kind === 'directory') {
         if (!entry.name.startsWith('.')) {
-          await traverse(entry as FileSystemDirectoryHandle, [...pathSegments, entry.name]);
+          // Recurse into subdirectory
+          promises.push(traverse(entry as FileSystemDirectoryHandle, [...pathSegments, entry.name]));
         }
       }
     }
+    // Wait for all items in this directory to be processed
+    await Promise.all(promises);
   }
 
   await traverse(dirHandle, []);
