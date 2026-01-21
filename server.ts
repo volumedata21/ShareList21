@@ -77,6 +77,8 @@ interface UploadStatus {
 const activeDownloads = new Map<string, DownloadStatus>();
 const activeUploads = new Map<string, UploadStatus>();
 const generateId = () => Math.random().toString(36).substring(2, 9);
+const downloadQueue: string[] = [];
+let isQueueProcessing = false;
 
 // NEW: Global Scan State
 let globalScanStatus = {
@@ -404,6 +406,31 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
   }
 };
 
+// --- QUEUE PROCESSOR ---
+const processQueue = async () => {
+  // If already running or empty, stop
+  if (isQueueProcessing) return;
+  if (downloadQueue.length === 0) return;
+
+  isQueueProcessing = true;
+  const id = downloadQueue.shift(); // Get next job ID
+
+  if (id) {
+    const job = activeDownloads.get(id);
+    // Only process if valid and not cancelled
+    if (job && job.status !== 'cancelled' && job.status !== 'skipped' && job.status !== 'completed') {
+      try {
+        await downloadFile(job.remoteUrl, job.remotePath, job.localPath, id);
+      } catch (e) {
+        console.error(`Job ${id} failed in queue.`);
+      }
+    }
+  }
+
+  isQueueProcessing = false;
+  processQueue(); // Loop to check for the next item
+};
+
 // --- ROUTES ---
 
 app.get('/api/disk', requirePin, async (req, res) => {
@@ -468,7 +495,6 @@ app.post('/api/download', requirePin, async (req, res) => {
 
   if (!owner) return res.status(400).json({ error: "Missing owner" });
 
-  // NEW DATABASE LOGIC START
   const row = db.prepare('SELECT url FROM nodes WHERE owner = ?').get(owner) as { url: string } | undefined;
     
   if (!row || !row.url) return res.status(404).json({ error: "User node not found" });
@@ -476,7 +502,6 @@ app.post('/api/download', requirePin, async (req, res) => {
   const remoteBaseUrl = row.url;
   const jobIds: string[] = [];
 
-  // Register Jobs (This part stays largely the same)
   queue.forEach(item => {
       const id = generateId();
       jobIds.push(id);
@@ -488,24 +513,19 @@ app.post('/api/download', requirePin, async (req, res) => {
         localPath: path.join(DOWNLOAD_ROOT, item.filename),
         totalBytes: 0, 
         downloadedBytes: 0,
-        status: 'pending',
+        status: 'pending', // IMPORTANT: Starts as 'pending'
         startTime: Date.now(),
         speed: 0
       });
+      
+      // NEW: Add to the back of the line!
+      downloadQueue.push(id);
   });
 
   res.json({ success: true, message: `Queued ${queue.length} files.` });
 
-  // Start background loop
-  for (const id of jobIds) {
-    const job = activeDownloads.get(id);
-    if (!job || job.status === 'cancelled') continue;
-    try {
-      await downloadFile(job.remoteUrl, job.remotePath, job.localPath, id);
-    } catch (e) {
-      console.error("Batch error", e);
-    }
-    } 
+  // NEW: Start the processor if it's sleeping
+  processQueue(); 
 });
 
 app.post('/api/download/cancel', requirePin, (req, res) => {
@@ -523,14 +543,20 @@ app.post('/api/download/cancel', requirePin, (req, res) => {
 app.post('/api/download/retry', requirePin, async (req, res) => {
   const { id } = req.body;
   const job = activeDownloads.get(id);
+  
   if (!job) return res.status(404).json({ error: "Not found" });
   if (job.status === 'downloading') return res.status(400).json({ error: "Busy" });
+  // Prevent double-queuing
+  if (downloadQueue.includes(id)) return res.status(400).json({ error: "Already queued" });
 
   activeDownloads.set(id, { ...job, status: 'pending', error: undefined, speed: 0 });
-  res.json({ success: true, message: "Retrying" });
+  
+  // NEW: Add to back of queue
+  downloadQueue.push(id);
+  res.json({ success: true, message: "Re-queued" });
 
-  // Fire and forget retry
-  downloadFile(job.remoteUrl, job.remotePath, job.localPath, id).catch(console.error);
+  // NEW: Start processor
+  processQueue();
 });
 
 app.post('/api/downloads/clear', requirePin, (req, res) => {
