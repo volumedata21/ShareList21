@@ -7,10 +7,10 @@ services:
       - "5021:80"
     volumes:
       - ./data:/data
+      - /path/to/downloads:/downloads
       - /path/to/movies:/media/movies
-      - /path/to/music:/media/music
       - /path/to/tvshows:/media/tvshows
-#      - /path/to/media:/media/
+      - /path/to/music:/media/music
 
     environment:
       - APP_USERS=Joe,Lamar,Josh # Must add all users here

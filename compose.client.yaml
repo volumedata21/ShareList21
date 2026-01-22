@@ -11,7 +11,7 @@ services:
       - /location/of/your/Movies:/media/movies
 #     - /location/of/your/TV:/media/tv
 #     - /location/of/your/Music:/media/music
-#     - /location/of/your/media:/media
+
     environment:
       - APP_PIN=1234 # Change this
       - SYNC_SECRET=REPLACEME # Must match host's SYNC_SECRET
