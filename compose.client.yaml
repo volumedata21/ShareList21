@@ -9,8 +9,8 @@ services:
       - ./data:/data  # Folder for app's database
       - /location/for/Downloads:/downloads
       - /location/of/your/Movies:/media/movies
-#     - /location/of/your/TV:/media/tv
-#     - /location/of/your/Music:/media/music
+      - /location/of/your/TV:/media/tv
+      - /location/of/your/Music:/media/music
 
     environment:
       - APP_PIN=1234 # Change this

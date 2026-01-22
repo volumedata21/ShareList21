@@ -11,36 +11,66 @@ export const formatBytes = (bytes: number, decimals = 2): string => {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 };
 
+/**
+ * INTELLIGENT NAME CLEANER
+ * 1. Year Anchor: If (YYYY) exists, keep it and discard everything after.
+ * 2. Tech Cleanup: If no year, strip technical jargon but keep the title.
+ */
 export const cleanName = (filename: string): string => {
   if (!filename) return '';
 
-  // 1. Remove extension
+  // 1. Remove file extension
   let name = filename.replace(/\.[^/.]+$/, "");
 
-  // 2. Remove [brackets] and (parentheses) with year/resolution info
-  name = name.replace(/\[.*?\]/g, "");
-  name = name.replace(/\(\d{4}\)/g, ""); // Remove (2024)
+  // 2. YEAR ANCHOR STRATEGY (Movies)
+  // Look for the year pattern (YYYY). 
+  // We strictly want to KEEP the year, but discard what comes AFTER it.
+  const yearMatch = name.match(/^(.*?)(\(\d{4}\))/);
+  
+  if (yearMatch) {
+    // yearMatch[1] = Title ("Legoland ")
+    // yearMatch[2] = Year ("(2026)")
+    // We combine them and ignore the rest of the string (the trash)
+    name = `${yearMatch[1]}${yearMatch[2]}`;
+  } 
+  else {
+    // 3. NO YEAR STRATEGY (TV Shows / Misc)
+    // If no year, we rely on the " - " separator or Bracket cleanup.
 
-  // 3. Remove common release trash
-  const metaPatterns = [
-    /\b(1080p|720p|4k|2160p|uhd|bluray|web-dl|remux|h264|h265|hevc|hdr|aac|ac3|dts|5\.1|7\.1)\b/gi,
-  ];
+    // Remove [brackets] and {braces} entirely
+    name = name.replace(/\[.*?\]/g, "").replace(/\{.*?\}/g, "");
 
-  metaPatterns.forEach(pattern => {
-    name = name.replace(pattern, "");
-  });
+    // Conditional Dash Logic:
+    // Only split at " - " if the part AFTER the dash is tech info.
+    if (name.includes(' - ')) {
+      const parts = name.split(' - ');
+      const lastPart = parts[parts.length - 1].toLowerCase();
+      
+      // Terms that indicate the suffix is just metadata, not part of the title
+      const techTerms = ['4k', '1080p', '720p', '2160p', 'remux', 'bluray', 'web-dl', 'hevc', 'hdr', 'dvd', 'rip'];
+      const isTechSuffix = techTerms.some(t => lastPart.includes(t));
 
-  // 4. Replace dots and underscores with spaces
+      if (isTechSuffix) {
+        parts.pop(); // Remove the tech suffix
+        name = parts.join(' - ');
+      }
+    }
+  }
+
+  // 4. General Cleanup (Applies to both strategies)
+  
+  // Remove dots/underscores (but keep dashes as they might be part of the title)
   name = name.replace(/[._]/g, " ");
 
-  // 5. Cleanup whitespace
-  return name.replace(/\s{2,}/g, " ").trim();
+  // Final whitespace polish
+  return name.trim();
 };
 
 // --- CORE DETECTION LOGIC ---
 
 export const getMediaType = (path: string, filename: string): 'Movie' | 'TV Show' | 'Music' | 'Unknown' => {
   const lowerName = filename.toLowerCase();
+  // Normalize path separators to forward slashes for consistent regex
   const lowerPath = path.toLowerCase().replace(/\\/g, '/'); 
 
   // 1. Check Extensions
@@ -52,23 +82,17 @@ export const getMediaType = (path: string, filename: string): 'Movie' | 'TV Show
   // 2. Audio is usually Music
   if (isAudio) return 'Music';
 
-  // 3. TV Detection (Strongest Signals)
-  // S01E01 or 1x01 in filename
+  // 3. Explicit Folder Detection (Matches your new Scanner.ts)
+  if (/\/movies\//.test(lowerPath)) return 'Movie';
+  if (/\/tv\//.test(lowerPath) || /\/tvshows\//.test(lowerPath)) return 'TV Show';
+  if (/\/music\//.test(lowerPath)) return 'Music';
+
+  // 4. Fallback: TV Detection via Filename (S01E01)
   if (/s\d{1,2}e\d{1,2}/i.test(lowerName) || /\d{1,2}x\d{1,2}/.test(lowerName)) {
     return 'TV Show';
   }
-  // Folder keywords
-  if (/\/tv|\/shows|\/series|\/seasons?|\/anime|\/cartoons/i.test(lowerPath)) {
-    return 'TV Show';
-  }
 
-  // 4. Movie Detection
-  if (/\/movies?|\/films?|\/cinema/i.test(lowerPath)) {
-    return 'Movie';
-  }
-
-  // 5. Fallback for Videos
-  // If it's video but not clearly TV, default to Movie
+  // 5. Default Fallback
   return 'Movie';
 };
 
@@ -95,6 +119,7 @@ export const getMusicMetadata = (pathStr: string) => {
 
 export const getSeriesName = (filename: string): string | null => {
   // Matches "Breaking.Bad.S01E01" -> "Breaking Bad"
+  // We use cleanName here to ensure dots are removed
   const match = filename.match(/(.*?)[._\s-]*(s\d{1,2}e\d{1,2}|\d{1,2}x\d{1,2})/i);
   if (match && match[1]) {
     return cleanName(match[1]);
@@ -118,7 +143,8 @@ export const getEpisodeTitle = (filename: string): string => {
   // Grab text AFTER S01E01
   const match = filename.match(/s\d{1,2}e\d{1,2}[._\s-]*(.*?)(\.(mkv|mp4|avi)|$)/i);
   if (match && match[1]) {
-     return cleanName(match[1]);
+     // We simply replace dots with spaces here, avoiding the aggressive Movie cleaner
+     return match[1].replace(/[._]/g, " ").trim();
   }
   return '';
 };
