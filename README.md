@@ -14,8 +14,10 @@ services:
       - "5021:80"
     volumes:
       - ./data:/data
-      - /path/to/media:/media/
+      - /path/to/downloads:/downloads
       - /path/to/movies:/media/movies
+      - /path/to/tvshows:/media/tvshows
+      - /path/to/music:/media/music
 
     environment:
       - APP_USERS=Joe,Lamar,Josh # Must add all users here
@@ -25,11 +27,12 @@ services:
       - MEDIA_ROOT=/media
       - DOWNLOAD_ROOT=/downloads
       - CRON_SCHEDULE=0 3 * * * # Optional, auto sync at 3 AM
-      - NODE_URL=https://MySL21URL.com
+      - NODE_URL=https://yourdomain.com
         # CRITICAL: This must be your Public IP or Domain. 
         # Clients use this URL to connect to you.
 
 # Generate a SYNC_SECRET using command line: 'openssl rand -hex 32'
+# App pin can be any length and combination of numbers and letters.
 ```
 
 ### Client compose.yaml
@@ -42,30 +45,31 @@ If you have multiple users they should be using the client compose file. Directi
 5. (Optional) Change or eliminate 'CRON_SCHEDULE'. This runs a daily sync automatically.
 6. Replace NODE_URL 
 ```
-sharelist-client:
+services:
+  sharelist-client:
     image: volumedata21/sharelist21:latest
     container_name: sharelist-client
     restart: unless-stopped
     ports:
-      - "5021:80" #Frontend
+      - "5021:80"
     volumes:
       - ./data:/data  # Folder for app's database
-      - /location/of/your/Movies:/media/movies
       - /location/for/Downloads:/downloads
-#     - /location/of/your/TV:/media/tv
-#     - /location/of/your/Music:/media/music
-#     - /location/of/your/media:/media   
+      - /location/of/your/Movies:/media/movies
+      - /location/of/your/TV:/media/tv
+      - /location/of/your/Music:/media/music
+
     environment:
-      - APP_USERS=Joe,Lamar,Josh
-      - APP_PIN=1234
-      - SYNC_SECRET=12345
-      - HOST_USER=Lamar # This is your username
-      - MASTER_URL=https://MySL21URL.com 
-        # This should be the host server's URL to sync everyone's database 
+      - APP_PIN=1234 # Change this
+      - SYNC_SECRET=REPLACEME # Must match host's SYNC_SECRET
+      - HOST_USER=Lamar # Your username, must be exactly as written in host's compose file.
+      - MASTER_URL=https://replace-me-with-the-hostserver.com # URL of host's server
       - MEDIA_ROOT=/media
       - DOWNLOAD_ROOT=/downloads
-      - PORT=80
-      - NODE_URL=https://mynode.com 
-        # URL to your SL21 instance, only if you want others to be able to download from your server.
+      - NODE_URL=http://clients_public_address:5021 # Do NOT use a trailing slash, eg https://site.com/
+      - CRON_SCHEDULE=0 3 * * * # Optional, auto sync at 3 AM
+
+# App pin can be any length and combination of numbers and letters.
+
     
 ```
