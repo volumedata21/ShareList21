@@ -108,28 +108,28 @@ const replaceUserFiles = (owner: string, files: MediaFile[]) => {
   const CHUNK_SIZE = 500;
   for (let i = 0; i < files.length; i += CHUNK_SIZE) {
     const chunk = files.slice(i, i + CHUNK_SIZE);
-    
+
     // Tiny transaction for this chunk only
     const transaction = db.transaction((batch) => {
       for (const f of batch) {
         insertStmt.run(
-          `${owner}:${f.path}`, 
-          owner, 
-          f.rawFilename, 
-          f.path, 
-          f.library, 
-          f.quality, 
-          f.sizeBytes, 
+          `${owner}:${f.path}`,
+          owner,
+          f.rawFilename,
+          f.path,
+          f.library,
+          f.quality,
+          f.sizeBytes,
           f.lastModified
         );
       }
     });
-    
+
     transaction(chunk);
   }
 };
 
-const updateExternalCache = (files: MediaFile[], nodes: {owner:string, url:string}[]) => {
+const updateExternalCache = (files: MediaFile[], nodes: { owner: string, url: string }[]) => {
   const nodeStmt = db.prepare(`INSERT INTO nodes (owner, url) VALUES (?, ?) ON CONFLICT(owner) DO UPDATE SET url=excluded.url`);
   const deleteStmt = db.prepare('DELETE FROM media_files WHERE owner != ?');
   const fileStmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -139,7 +139,7 @@ const updateExternalCache = (files: MediaFile[], nodes: {owner:string, url:strin
     for (const n of nodes) {
       nodeStmt.run(n.owner, n.url);
     }
-    
+
     // Clear old cache (everything except your own files)
     deleteStmt.run(HOST_USER);
 
@@ -147,13 +147,13 @@ const updateExternalCache = (files: MediaFile[], nodes: {owner:string, url:strin
     for (const f of files) {
       if (f.owner !== HOST_USER) {
         fileStmt.run(
-          `${f.owner}:${f.path}`, 
-          f.owner, 
-          f.rawFilename, 
-          f.path, 
-          f.library, 
-          f.quality, 
-          f.sizeBytes, 
+          `${f.owner}:${f.path}`,
+          f.owner,
+          f.rawFilename,
+          f.path,
+          f.library,
+          f.quality,
+          f.sizeBytes,
           f.lastModified
         );
       }
@@ -167,7 +167,7 @@ try {
   // Create tables immediately
   db.exec(`CREATE TABLE IF NOT EXISTS media_files (id TEXT PRIMARY KEY, owner TEXT, filename TEXT, path TEXT, library TEXT, quality TEXT, size_bytes INTEGER, last_modified INTEGER)`);
   db.exec(`CREATE TABLE IF NOT EXISTS nodes (owner TEXT PRIMARY KEY, url TEXT)`);
-  
+
   if (NODE_URL) {
     registerNode(HOST_USER, NODE_URL);
   }
@@ -181,14 +181,14 @@ app.use(express.json({ limit: '50mb' }));
 const distPath = path.join(__dirname, '../dist');
 app.set('trust proxy', 1);
 
-const generalLimiter = rateLimit({ windowMs: 15*60*1000, max: 1000 });
+const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 1000 });
 app.use(generalLimiter);
 
 const requirePin = async (req: Request, res: Response, next: NextFunction) => {
   if (!APP_PIN) return next();
   if (String(req.headers['x-app-pin']) !== String(APP_PIN)) {
-     await new Promise(r => setTimeout(r, 1000));
-     return res.status(401).json({ error: 'Invalid PIN' });
+    await new Promise(r => setTimeout(r, 1000));
+    return res.status(401).json({ error: 'Invalid PIN' });
   }
   next();
 };
@@ -196,10 +196,27 @@ const requirePin = async (req: Request, res: Response, next: NextFunction) => {
 const requireSecret = async (req: Request, res: Response, next: NextFunction) => {
   if (!SYNC_SECRET) return res.status(500).json({ error: 'No Sync Secret' });
   if (String(req.headers['x-sync-secret']) !== String(SYNC_SECRET)) {
-     await new Promise(r => setTimeout(r, 1000));
-     return res.status(401).json({ error: 'Unauthorized' });
+    await new Promise(r => setTimeout(r, 1000));
+    return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
+};
+
+// Add this NEW middleware below 'requirePin' and 'requireSecret'
+const requirePinOrSecret = async (req: Request, res: Response, next: NextFunction) => {
+  // 1. Allow if Secret is valid (Server-to-Server)
+  if (SYNC_SECRET && req.headers['x-sync-secret'] === String(SYNC_SECRET)) {
+    return next();
+  }
+  // 2. Allow if PIN is valid (User-to-Frontend)
+  if (!APP_PIN) return next();
+  if (String(req.headers['x-app-pin']) === String(APP_PIN)) {
+    return next();
+  }
+
+  // 3. Block if neither
+  await new Promise(r => setTimeout(r, 1000));
+  return res.status(401).json({ error: 'Unauthorized' });
 };
 
 // --- HYBRID DOWNLOAD WORKER ---
@@ -238,7 +255,7 @@ const attemptDownload = (remoteUrl: string, remotePath: string, localPath: strin
 
     const req = lib.get(downloadUrl, {
       agent,
-      headers: { 
+      headers: {
         'x-sync-secret': SYNC_SECRET || '',
         'Range': `bytes=${startByte}-` // RESUME SUPPORT
       },
@@ -262,12 +279,12 @@ const attemptDownload = (remoteUrl: string, remotePath: string, localPath: strin
       // Update Total Size in UI
       const job = activeDownloads.get(jobId);
       if (job) {
-         job.totalBytes = totalSize;
-         job.downloadedBytes = startByte;
+        job.totalBytes = totalSize;
+        job.downloadedBytes = startByte;
       }
 
       const fileStream = fs.createWriteStream(partPath, { flags: startByte > 0 ? 'a' : 'w' });
-      
+
       let lastTime = Date.now();
       let lastBytes = startByte;
 
@@ -279,10 +296,10 @@ const attemptDownload = (remoteUrl: string, remotePath: string, localPath: strin
           // Calculate Speed
           const now = Date.now();
           if (now - lastTime > 1000) {
-             const seconds = (now - lastTime) / 1000;
-             j.speed = Math.floor((j.downloadedBytes - lastBytes) / seconds);
-             lastTime = now;
-             lastBytes = j.downloadedBytes;
+            const seconds = (now - lastTime) / 1000;
+            j.speed = Math.floor((j.downloadedBytes - lastBytes) / seconds);
+            lastTime = now;
+            lastBytes = j.downloadedBytes;
           }
         }
       });
@@ -299,8 +316,8 @@ const attemptDownload = (remoteUrl: string, remotePath: string, localPath: strin
     });
 
     req.on('error', err => {
-        clearInterval(stallInterval);
-        reject(err);
+      clearInterval(stallInterval);
+      reject(err);
     });
   });
 };
@@ -313,28 +330,28 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
   // --- NEW: PRE-FLIGHT DISK CHECK ---
   // Get job details to know the total size (if we have it from a previous attempt)
   const jobInfo = activeDownloads.get(jobId);
-  
+
   // Only check if we haven't started (status is pending) to avoid spamming checks
   if (jobInfo && jobInfo.status === 'pending') {
-     try {
-       const space = await checkDiskSpace(DOWNLOAD_ROOT);
-       // Safety Buffer: Keep at least 500MB free
-       const MIN_FREE_BUFFER = 500 * 1024 * 1024; 
-       
-       // If we know the total size, check it. (Note: TotalBytes might be 0 if new)
-       if (jobInfo.totalBytes > 0 && space.free < (jobInfo.totalBytes - jobInfo.downloadedBytes + MIN_FREE_BUFFER)) {
-          throw new Error(`Insufficient Disk Space (Free: ${formatBytes(space.free)})`);
-       }
-       
-       // If we assume a generic safety check (e.g. stop if < 1GB free regardless)
-       if (space.free < 1 * 1024 * 1024 * 1024) {
-          throw new Error("Disk dangerously low (<1GB). Download prevented.");
-       }
-     } catch (e: any) {
-       // Fail the job immediately
-       activeDownloads.set(jobId, { ...jobInfo, status: 'error', error: e.message });
-       return; 
-     }
+    try {
+      const space = await checkDiskSpace(DOWNLOAD_ROOT);
+      // Safety Buffer: Keep at least 500MB free
+      const MIN_FREE_BUFFER = 500 * 1024 * 1024;
+
+      // If we know the total size, check it. (Note: TotalBytes might be 0 if new)
+      if (jobInfo.totalBytes > 0 && space.free < (jobInfo.totalBytes - jobInfo.downloadedBytes + MIN_FREE_BUFFER)) {
+        throw new Error(`Insufficient Disk Space (Free: ${formatBytes(space.free)})`);
+      }
+
+      // If we assume a generic safety check (e.g. stop if < 1GB free regardless)
+      if (space.free < 1 * 1024 * 1024 * 1024) {
+        throw new Error("Disk dangerously low (<1GB). Download prevented.");
+      }
+    } catch (e: any) {
+      // Fail the job immediately
+      activeDownloads.set(jobId, { ...jobInfo, status: 'error', error: e.message });
+      return;
+    }
   }
 
   // Skip if already done
@@ -351,8 +368,8 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
   const controller = new AbortController();
   const activeJob = activeDownloads.get(jobId);
   if (activeJob) {
-      activeJob.status = 'downloading';
-      activeJob.abortController = controller;
+    activeJob.status = 'downloading';
+    activeJob.abortController = controller;
   }
 
   const MAX_RETRIES = 5;
@@ -361,47 +378,47 @@ const downloadFile = async (remoteUrl: string, remotePath: string, localPath: st
   while (attempt < MAX_RETRIES) {
     attempt++;
     try {
-       await attemptDownload(remoteUrl, remotePath, localPath, jobId, controller.signal, HOST_USER);
-       
-       // SUCCESS! Rename .part to actual file
-       const partPath = `${localPath}.part`;
-       if (fs.existsSync(partPath)) fs.renameSync(partPath, localPath);
-       
-       const finalJob = activeDownloads.get(jobId);
-       if (finalJob) activeDownloads.set(jobId, { ...finalJob, status: 'completed', speed: 0 });
-       return;
+      await attemptDownload(remoteUrl, remotePath, localPath, jobId, controller.signal, HOST_USER);
+
+      // SUCCESS! Rename .part to actual file
+      const partPath = `${localPath}.part`;
+      if (fs.existsSync(partPath)) fs.renameSync(partPath, localPath);
+
+      const finalJob = activeDownloads.get(jobId);
+      if (finalJob) activeDownloads.set(jobId, { ...finalJob, status: 'completed', speed: 0 });
+      return;
 
     } catch (e: any) {
-       // Check if user cancelled manually
-       const currentJob = activeDownloads.get(jobId);
-       if (!currentJob || currentJob.status === 'cancelled') return;
+      // Check if user cancelled manually
+      const currentJob = activeDownloads.get(jobId);
+      if (!currentJob || currentJob.status === 'cancelled') return;
 
-       // If "AbortError", it was likely a timeout or manual cancel
-       if (e.name === 'AbortError') return;
+      // If "AbortError", it was likely a timeout or manual cancel
+      if (e.name === 'AbortError') return;
 
-       console.error(`[Download] Attempt ${attempt} failed: ${e.message}`);
+      console.error(`[Download] Attempt ${attempt} failed: ${e.message}`);
 
-       if (attempt >= MAX_RETRIES) {
-          // Failed after all retries
-          activeDownloads.set(jobId, { ...currentJob, status: 'error', error: e.message });
-          throw e;
-       } else {
-          // WAIT AND RETRY
-          // Exponential backoff: 2s, 5s, 10s...
-          const waitTime = Math.min(2000 * Math.pow(2.5, attempt - 1), 30000);
-          activeDownloads.set(jobId, { 
-             ...currentJob, 
-             error: `Retrying in ${Math.ceil(waitTime/1000)}s... (${e.message})` 
-          });
-          
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          
-          // Reset status to downloading for next attempt
-          const retryJob = activeDownloads.get(jobId);
-          if (retryJob && retryJob.status !== 'cancelled') {
-             activeDownloads.set(jobId, { ...retryJob, status: 'downloading', error: undefined });
-          }
-       }
+      if (attempt >= MAX_RETRIES) {
+        // Failed after all retries
+        activeDownloads.set(jobId, { ...currentJob, status: 'error', error: e.message });
+        throw e;
+      } else {
+        // WAIT AND RETRY
+        // Exponential backoff: 2s, 5s, 10s...
+        const waitTime = Math.min(2000 * Math.pow(2.5, attempt - 1), 30000);
+        activeDownloads.set(jobId, {
+          ...currentJob,
+          error: `Retrying in ${Math.ceil(waitTime / 1000)}s... (${e.message})`
+        });
+
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+
+        // Reset status to downloading for next attempt
+        const retryJob = activeDownloads.get(jobId);
+        if (retryJob && retryJob.status !== 'cancelled') {
+          activeDownloads.set(jobId, { ...retryJob, status: 'downloading', error: undefined });
+        }
+      }
     }
   }
 };
@@ -452,12 +469,12 @@ app.get('/api/inventory', requirePin, async (req, res) => {
     }
 
     const files = await fs.promises.readdir(DOWNLOAD_ROOT);
-    
+
     // Identify .part files vs completed files
     const partials = files
       .filter(f => f.endsWith('.part'))
       .map(f => f.replace('.part', '')); // Remove extension to get base name
-      
+
     const complete = files
       .filter(f => !f.endsWith('.part'));
 
@@ -474,7 +491,7 @@ app.get('/api/scan-status', requirePin, (req, res) => {
 });
 
 app.get('/api/uploads', requirePin, (req, res) => {
-  const list = Array.from(activeUploads.values()).sort((a,b) => b.startTime - a.startTime);
+  const list = Array.from(activeUploads.values()).sort((a, b) => b.startTime - a.startTime);
   res.json(list);
 });
 
@@ -496,36 +513,36 @@ app.post('/api/download', requirePin, async (req, res) => {
   if (!owner) return res.status(400).json({ error: "Missing owner" });
 
   const row = db.prepare('SELECT url FROM nodes WHERE owner = ?').get(owner) as { url: string } | undefined;
-    
+
   if (!row || !row.url) return res.status(404).json({ error: "User node not found" });
-    
+
   const remoteBaseUrl = row.url;
   const jobIds: string[] = [];
 
   queue.forEach(item => {
-      const id = generateId();
-      jobIds.push(id);
-      activeDownloads.set(id, {
-        id,
-        filename: item.filename,
-        remoteUrl: remoteBaseUrl,
-        remotePath: item.remotePath,
-        localPath: path.join(DOWNLOAD_ROOT, item.filename),
-        totalBytes: 0, 
-        downloadedBytes: 0,
-        status: 'pending', // IMPORTANT: Starts as 'pending'
-        startTime: Date.now(),
-        speed: 0
-      });
-      
-      // NEW: Add to the back of the line!
-      downloadQueue.push(id);
+    const id = generateId();
+    jobIds.push(id);
+    activeDownloads.set(id, {
+      id,
+      filename: item.filename,
+      remoteUrl: remoteBaseUrl,
+      remotePath: item.remotePath,
+      localPath: path.join(DOWNLOAD_ROOT, item.filename),
+      totalBytes: 0,
+      downloadedBytes: 0,
+      status: 'pending', // IMPORTANT: Starts as 'pending'
+      startTime: Date.now(),
+      speed: 0
+    });
+
+    // NEW: Add to the back of the line!
+    downloadQueue.push(id);
   });
 
   res.json({ success: true, message: `Queued ${queue.length} files.` });
 
   // NEW: Start the processor if it's sleeping
-  processQueue(); 
+  processQueue();
 });
 
 app.post('/api/download/cancel', requirePin, (req, res) => {
@@ -543,14 +560,14 @@ app.post('/api/download/cancel', requirePin, (req, res) => {
 app.post('/api/download/retry', requirePin, async (req, res) => {
   const { id } = req.body;
   const job = activeDownloads.get(id);
-  
+
   if (!job) return res.status(404).json({ error: "Not found" });
   if (job.status === 'downloading') return res.status(400).json({ error: "Busy" });
   // Prevent double-queuing
   if (downloadQueue.includes(id)) return res.status(400).json({ error: "Already queued" });
 
   activeDownloads.set(id, { ...job, status: 'pending', error: undefined, speed: 0 });
-  
+
   // NEW: Add to back of queue
   downloadQueue.push(id);
   res.json({ success: true, message: "Re-queued" });
@@ -561,13 +578,13 @@ app.post('/api/download/retry', requirePin, async (req, res) => {
 
 app.post('/api/downloads/clear', requirePin, (req, res) => {
   for (const [id, job] of activeDownloads.entries()) {
-    if (['completed','cancelled','error','skipped'].includes(job.status)) activeDownloads.delete(id);
+    if (['completed', 'cancelled', 'error', 'skipped'].includes(job.status)) activeDownloads.delete(id);
   }
   res.json({ success: true });
 });
 
 app.get('/api/downloads', requirePin, (req, res) => {
-  const list = Array.from(activeDownloads.values()).map(({ abortController, ...r }) => r).sort((a,b) => b.startTime - a.startTime);
+  const list = Array.from(activeDownloads.values()).map(({ abortController, ...r }) => r).sort((a, b) => b.startTime - a.startTime);
   res.json(list);
 });
 
@@ -578,11 +595,11 @@ app.post('/api/test-connection', requirePin, async (req, res) => {
   try {
     // If this server has a Master URL, try to ping it
     if (MASTER_URL) {
-       const response = await fetch(`${MASTER_URL}/api/config`);
-       if (!response.ok) throw new Error(`Master responded with ${response.status}`);
-       return res.json({ success: true, message: "Connection to Master verified." });
+      const response = await fetch(`${MASTER_URL}/api/config`);
+      if (!response.ok) throw new Error(`Master responded with ${response.status}`);
+      return res.json({ success: true, message: "Connection to Master verified." });
     }
-    
+
     // If this is a Host (no Master URL), just reply successfully
     res.json({ success: true, message: "Server is online." });
   } catch (e: any) {
@@ -619,28 +636,28 @@ app.get('/api/serve', requireSecret, (req, res) => {
 
   // Helper to update speed calculations while stream flows
   const attachTracking = (stream: fs.ReadStream) => {
-     let lastTime = Date.now();
-     let lastBytes = 0;
+    let lastTime = Date.now();
+    let lastBytes = 0;
 
-     stream.on('data', (chunk) => {
-       const job = activeUploads.get(uploadId);
-       if (job) {
-          job.transferredBytes += chunk.length;
-          
-          const now = Date.now();
-          if (now - lastTime > 1000) {
-             const seconds = (now - lastTime) / 1000;
-             // Bytes sent since last check / seconds
-             job.speed = Math.floor((job.transferredBytes - lastBytes) / seconds);
-             lastTime = now;
-             lastBytes = job.transferredBytes;
-          }
-       }
-     });
+    stream.on('data', (chunk) => {
+      const job = activeUploads.get(uploadId);
+      if (job) {
+        job.transferredBytes += chunk.length;
 
-     // Cleanup when done or error
-     stream.on('close', () => activeUploads.delete(uploadId));
-     stream.on('error', () => activeUploads.delete(uploadId));
+        const now = Date.now();
+        if (now - lastTime > 1000) {
+          const seconds = (now - lastTime) / 1000;
+          // Bytes sent since last check / seconds
+          job.speed = Math.floor((job.transferredBytes - lastBytes) / seconds);
+          lastTime = now;
+          lastBytes = job.transferredBytes;
+        }
+      }
+    });
+
+    // Cleanup when done or error
+    stream.on('close', () => activeUploads.delete(uploadId));
+    stream.on('error', () => activeUploads.delete(uploadId));
   };
   // ---------------------------
 
@@ -673,15 +690,15 @@ app.post('/api/scan', requirePin, (req, res) => {
   }
 
   // 2. Reset Status
-  globalScanStatus = { 
-    isRunning: true, 
-    step: 'Starting...', 
-    localFiles: 0, 
-    newLocal: 0, 
-    remoteSummary: [], 
-    error: null 
+  globalScanStatus = {
+    isRunning: true,
+    step: 'Starting...',
+    localFiles: 0,
+    newLocal: 0,
+    remoteSummary: [],
+    error: null
   };
-  
+
   // 3. Respond IMMEDIATELY to the browser (The fix!)
   res.json({ success: true, message: "Scan started in background" });
 
@@ -689,48 +706,50 @@ app.post('/api/scan', requirePin, (req, res) => {
   (async () => {
     try {
       globalScanStatus.step = 'Scanning Local Files...';
-      
+
       // Run the scanner
       const files = await processFiles(MEDIA_ROOT, HOST_USER);
       globalScanStatus.localFiles = files.length;
-      
+
       // Database Update
       globalScanStatus.step = 'Updating Database...';
-      
+
       // --- ALWAYS SAVE LOCAL FILES FIRST ---
       await replaceUserFiles(HOST_USER, files);
 
       if (MASTER_URL) {
         // Satellite Mode: Sync to Master
         globalScanStatus.step = 'Syncing to Master...';
-        
+
         // Chunking logic for large libraries (prevents payload errors)
         const CHUNK_SIZE = 500;
         for (let i = 0; i < files.length; i += CHUNK_SIZE) {
-           const chunk = files.slice(i, i + CHUNK_SIZE);
-           
-           // --- FIX: ADD RESET FLAG FOR FIRST CHUNK ---
-           const isFirstChunk = (i === 0); 
-           
-           await fetch(`${MASTER_URL}/api/sync`, { 
-              method: 'POST', 
-              headers: {'Content-Type':'application/json','x-sync-secret':SYNC_SECRET||''}, 
-              body: JSON.stringify({
-                  owner: HOST_USER, 
-                  url: NODE_URL, 
-                  files: chunk,
-                  reset: isFirstChunk // <--- Allows host to wipe old data
-              })
-           });
+          const chunk = files.slice(i, i + CHUNK_SIZE);
+
+          // --- FIX: ADD RESET FLAG FOR FIRST CHUNK ---
+          const isFirstChunk = (i === 0);
+
+          await fetch(`${MASTER_URL}/api/sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-sync-secret': SYNC_SECRET || '' },
+            body: JSON.stringify({
+              owner: HOST_USER,
+              url: NODE_URL,
+              files: chunk,
+              reset: isFirstChunk // <--- Allows host to wipe old data
+            })
+          });
         }
-        
+
         // Fetch updates from Master
-        const r = await fetch(`${MASTER_URL}/api/files`, { headers: {'x-app-pin':APP_PIN||''} });
+        const r = await fetch(`${MASTER_URL}/api/files`, {
+          headers: { 'x-sync-secret': SYNC_SECRET || '' }
+        });
         const d = await r.json();
         if (d.files) await updateExternalCache(d.files, d.nodes);
         globalScanStatus.remoteSummary.push("Sync completed");
       }
-      
+
       globalScanStatus.step = 'Complete';
     } catch (e: any) {
       console.error("Scan error:", e);
@@ -743,7 +762,7 @@ app.post('/api/scan', requirePin, (req, res) => {
   })();
 });
 
-app.get('/api/files', requirePin, (req, res) => {
+app.get('/api/files', requirePinOrSecret, (req, res) => {
   try {
     const rows = db.prepare(`
       SELECT m.*, n.url as remote_url 
@@ -752,12 +771,12 @@ app.get('/api/files', requirePin, (req, res) => {
       ORDER BY m.filename ASC
     `).all() as any[];
 
-    const files = rows.map(r => ({ 
-      ...r, 
-      rawFilename: r.filename, 
-      sizeBytes: r.size_bytes, 
-      lastModified: r.last_modified, 
-      remoteUrl: r.remote_url 
+    const files = rows.map(r => ({
+      ...r,
+      rawFilename: r.filename,
+      sizeBytes: r.size_bytes,
+      lastModified: r.last_modified,
+      remoteUrl: r.remote_url
     }));
 
     const nodes = db.prepare('SELECT * FROM nodes').all();
@@ -771,7 +790,7 @@ if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
   app.get('*', (req, res) => {
     // Don't intercept API calls
-    if (req.path.startsWith('/api')) return res.status(404).json({error: 'Not Found'});
+    if (req.path.startsWith('/api')) return res.status(404).json({ error: 'Not Found' });
     res.sendFile(path.join(distPath, 'index.html'));
   });
 } else {
@@ -783,15 +802,15 @@ cron.schedule('0 * * * *', () => {
   const ONE_HOUR = 60 * 60 * 1000;
   const now = Date.now();
   let removed = 0;
-  
+
   for (const [id, job] of activeDownloads.entries()) {
     // Only remove jobs that are in a "Final" state
     if (['completed', 'error', 'cancelled', 'skipped'].includes(job.status)) {
-       // If it started more than 1 hour ago, forget it
-       if (now - job.startTime > ONE_HOUR) {
-          activeDownloads.delete(id);
-          removed++;
-       }
+      // If it started more than 1 hour ago, forget it
+      if (now - job.startTime > ONE_HOUR) {
+        activeDownloads.delete(id);
+        removed++;
+      }
     }
   }
   if (removed > 0) console.log(`[GC] Removed ${removed} old download jobs.`);
@@ -808,32 +827,32 @@ app.post('/api/sync', requireSecret, (req, res) => {
   // 2. Prepare Statements
   // Note: We use the same ID format as local files (owner:path)
   const insertStmt = db.prepare(`INSERT INTO media_files VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-  
+
   const transaction = db.transaction(() => {
     // 3. IF this is the first chunk, wipe the user's old data so we don't have duplicates
     if (reset) {
-       db.prepare('DELETE FROM media_files WHERE owner = ?').run(owner);
+      db.prepare('DELETE FROM media_files WHERE owner = ?').run(owner);
     }
-    
+
     // 4. Insert the new files
     for (const f of files) {
-       // Protect against bad data
-       if (!f.path || !f.rawFilename) continue;
+      // Protect against bad data
+      if (!f.path || !f.rawFilename) continue;
 
-       try {
-         insertStmt.run(
-            `${owner}:${f.path}`, // ID
-            owner,
-            f.rawFilename,
-            f.path,
-            f.library || 'Unknown',
-            f.quality || '',
-            f.sizeBytes || 0,
-            f.lastModified || 0
-         );
-       } catch(e) { 
-         // Ignore duplicates in case of retry
-       }
+      try {
+        insertStmt.run(
+          `${owner}:${f.path}`, // ID
+          owner,
+          f.rawFilename,
+          f.path,
+          f.library || 'Unknown',
+          f.quality || '',
+          f.sizeBytes || 0,
+          f.lastModified || 0
+        );
+      } catch (e) {
+        // Ignore duplicates in case of retry
+      }
     }
   });
 
