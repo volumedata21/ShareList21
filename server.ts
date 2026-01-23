@@ -705,12 +705,27 @@ app.post('/api/scan', requirePin, (req, res) => {
   // 4. Start the heavy work in the background (Async)
   (async () => {
     try {
+      // 1. NEW: Snapshot the existing files BEFORE we scan
+      // We do this so we can compare "Before" vs "After" to find what's new.
+      const existingRows = db.prepare('SELECT path FROM media_files WHERE owner = ?').all(HOST_USER) as { path: string }[];
+      const existingPaths = new Set(existingRows.map(r => r.path));
+
       globalScanStatus.step = 'Scanning Local Files...';
-
-      // Run the scanner
+      
+      // 2. Run the scanner
       const files = await processFiles(MEDIA_ROOT, HOST_USER);
+      
+      // 3. NEW: Calculate the "New Files" count
+      let addedCount = 0;
+      for (const f of files) {
+          if (!existingPaths.has(f.path)) {
+              addedCount++;
+          }
+      }
+      
+      globalScanStatus.newLocal = addedCount;
       globalScanStatus.localFiles = files.length;
-
+      
       // Database Update
       globalScanStatus.step = 'Updating Database...';
 
