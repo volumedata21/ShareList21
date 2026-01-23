@@ -37,7 +37,7 @@ const OwnerAvatar = ({
       onClick={onClick}
       className={`group flex flex-col items-center gap-1.5 transition-all duration-300 ${isDimmed ? 'opacity-40 grayscale hover:opacity-70 hover:grayscale-0' : 'opacity-100 scale-105'}`}
     >
-      <div className={`relative w-11 h-11 rounded-2xl p-0.5 transition-all ${isActive ? 'bg-gradient-to-br from-orange-400 to-red-500 shadow-lg shadow-orange-500/20' : 'bg-transparent'}`}>
+      <div className={`relative w-24 h-24 rounded-2xl p-0.5 transition-all ${isActive ? 'bg-gradient-to-br from-orange-400 to-red-500 shadow-lg shadow-orange-500/20' : 'bg-transparent'}`}>
         <div className="w-full h-full rounded-[14px] overflow-hidden bg-gray-800 relative border border-white/10">
           {!imgError ? (
             <img 
