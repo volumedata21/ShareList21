@@ -94,6 +94,11 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
 
     const has4KRemux = uniqueRemuxes.some(r => r.is4K);
 
+    // Extract specific formats like "3D SBS"
+    const threeDTags = Array.from(new Set(
+        item.files.map(f => get3DFormat(f.rawFilename)).filter((f): f is string => f !== null)
+    ));
+
     // --- CLEANING LOGIC ---
     const editionMatch = item.name.match(/\{edition-([^}]+)\}/i);
     const editionName = editionMatch ? editionMatch[1] : null;
@@ -115,6 +120,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             if (typeof q !== 'string' || q.trim().length === 0) return false;
             if (is4KQualityString(q)) return false;
             if (uniqueRemuxes.length > 0 && (q === '1080p' || q === '1080i')) return false;
+            if (q === '3D') return false;
             return true;
         })
     )).slice(0, 3);
@@ -217,14 +223,14 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-black/20 bg-black/20 text-white' : 'border-plex-orange bg-plex-orange text-black'}`}>4K UHD</span>
             )}
             
-            {is3D && (
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap 
+            {threeDTags.map((tag, idx) => (
+              <span key={`3d-${idx}`} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap 
                   ${selectedId === item.id 
                       ? 'border-emerald-300 bg-emerald-600 text-white' 
                       : 'border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]'}`}>
-                  3D
+                  {tag}
               </span>
-            )}
+            ))}
 
             {qualities.map((q, i) => {
               const isFlac = q.toUpperCase() === 'FLAC';

@@ -155,9 +155,22 @@ export const getEpisodeTitle = (filename: string): string => {
 
 export const get3DFormat = (filename: string): string | null => {
   const lower = filename.toLowerCase();
-  if (lower.includes('.sbs') || lower.includes('h-sbs')) return '3D SBS';
-  if (lower.includes('.hou') || lower.includes('h-ou')) return '3D OU';
-  if (lower.includes('3d')) return '3D';
+  
+  // Side-by-Side (SBS)
+  if (lower.includes('.sbs') || lower.includes('h-sbs') || lower.includes('half-sbs')) {
+    return '3D SBS';
+  }
+  
+  // Top-and-Bottom (OU / TAB)
+  if (lower.includes('.hou') || lower.includes('h-ou') || lower.includes('.tab') || lower.includes('.topbottom')) {
+    return '3D OU';
+  }
+  
+  // Generic 3D (Catch-all)
+  if (lower.includes('3d')) {
+    return '3D';
+  }
+  
   return null;
 };
 
