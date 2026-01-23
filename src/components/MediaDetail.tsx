@@ -23,10 +23,101 @@ interface ProcessedFile extends MediaFile {
   audioFormat?: string | null;
   editionTag?: string | null;
 }
+
+// --- HELPER: Owner Avatar (Large, for Filters) ---
+const OwnerAvatar = ({ 
+  user, 
+  isActive, 
+  isDimmed, 
+  onClick 
+}: { 
+  user: string; 
+  isActive: boolean; 
+  isDimmed: boolean; 
+  onClick: () => void 
+}) => {
+  const [imgError, setImgError] = useState(false);
+
+  // Generate color for fallback initials
+  const getColor = (str: string) => {
+    const colors = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-orange-500', 'bg-pink-500', 'bg-indigo-500'];
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
+  };
+
+  return (
+    <button 
+      onClick={onClick}
+      className={`group flex flex-col items-center gap-2 transition-all duration-300 ${isDimmed ? 'opacity-40 grayscale hover:opacity-70 hover:grayscale-0' : 'opacity-100'}`}
+    >
+      <div className={`relative w-12 h-12 rounded-2xl p-0.5 transition-all ${isActive ? 'bg-gradient-to-br from-orange-400 to-red-500 shadow-lg shadow-orange-500/20 scale-105' : 'bg-transparent hover:scale-105'}`}>
+        <div className="w-full h-full rounded-[14px] overflow-hidden bg-gray-800 relative border border-white/10">
+          {!imgError ? (
+            <img 
+              src={`/api/avatar/${user}`} 
+              alt={user} 
+              className="w-full h-full object-cover" 
+              onError={() => setImgError(true)} 
+            />
+          ) : (
+            <div className={`w-full h-full flex items-center justify-center text-white font-bold text-sm ${getColor(user)}`}>
+              {user.charAt(0).toUpperCase()}
+            </div>
+          )}
+          
+          {/* Active Gloss */}
+          {isActive && <div className="absolute inset-0 bg-white/10 pointer-events-none"></div>}
+        </div>
+
+        {/* Status Dot */}
+        <div className="absolute -bottom-0.5 -right-0.5 bg-gray-900 rounded-full p-0.5">
+           <div className="w-2.5 h-2.5 bg-green-500 rounded-full border border-gray-900 shadow-sm"></div>
+        </div>
+      </div>
+      
+      <span className={`text-[10px] font-bold tracking-wide truncate max-w-[64px] transition-colors ${isActive ? 'text-white' : 'text-gray-500 group-hover:text-gray-300'}`}>
+        {user}
+      </span>
+    </button>
+  );
+};
+
+// --- HELPER: Mini Avatar (Small, for File Rows) ---
+const MiniAvatar = ({ user }: { user: string }) => {
+  const [imgError, setImgError] = useState(false);
+  const getColor = (str: string) => {
+    const colors = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-orange-500', 'bg-pink-500', 'bg-indigo-500'];
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="w-5 h-5 rounded-md overflow-hidden bg-gray-800 shadow-sm ring-1 ring-white/10">
+        {!imgError ? (
+          <img 
+            src={`/api/avatar/${user}`} 
+            alt={user} 
+            className="w-full h-full object-cover" 
+            onError={() => setImgError(true)} 
+          />
+        ) : (
+          <div className={`w-full h-full flex items-center justify-center text-[9px] font-bold text-white ${getColor(user)}`}>
+            {user.charAt(0).toUpperCase()}
+          </div>
+        )}
+      </div>
+      <span className="text-xs font-bold text-gray-300">{user}</span>
+    </div>
+  );
+};
+
 const getIcon = (type: string, isAlbum = false) => {
   switch (type) {
     case 'Movie': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>;
-    case 'TV Show': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
+    case 'TV Show': return <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
     case 'Music': return isAlbum 
       ? <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg> 
       : <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>;
@@ -272,12 +363,11 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
                 </div>
             ) : null}
 
-            <div className="flex items-center gap-2 mb-1">
-              <div className="flex items-center gap-1.5 bg-green-500/10 px-2 py-0.5 rounded border border-green-500/20">
-                  <span className="text-sm font-extrabold text-green-400 tracking-wide">{file.owner}</span>
-              </div>
+            {/* NEW: Mini Avatar Display */}
+            <div className="flex items-center gap-2 mb-2">
+              <MiniAvatar user={file.owner} />
               <span className="text-xs text-gray-600">•</span>
-              <span className="text-xs text-gray-400">{file.library}</span>
+              <span className="text-xs text-gray-400 font-medium">{file.library}</span>
             </div>
 
             <button 
@@ -338,7 +428,7 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
         </div>
 
         <div className="p-4 flex flex-col gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {file.editionTag && (
                 <span className="text-xs font-bold px-2 py-0.5 rounded border border-cyan-500 text-cyan-300 bg-cyan-900/40 shadow-[0_0_8px_rgba(34,211,238,0.3)]">
                   {file.editionTag}
@@ -425,7 +515,21 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
         <div className="p-6 space-y-8">
            <section>
              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">Filter by Owner</h3>
-             <div className="flex flex-wrap gap-2">{uniqueOwners.map(owner => {const isActive = filterOwner === owner;const isDimmed = filterOwner && !isActive;return (<button key={owner} onClick={() => setFilterOwner(isActive ? null : owner)} className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all duration-200 cursor-pointer ${isActive ? 'bg-green-500 border-green-400 text-black shadow-[0_0_10px_rgba(34,197,94,0.6)] scale-105 font-bold' : isDimmed ? 'bg-gray-800 border-gray-700 text-gray-600 opacity-60 hover:opacity-100 hover:text-gray-400' : 'bg-green-900/20 border-green-500/50 text-green-100 hover:bg-green-900/40'}`}><div className={`w-2 h-2 rounded-full shadow-sm ${isActive ? 'bg-black' : 'bg-green-500'}`}></div><span className="text-sm">{owner}</span></button>);})}</div>
+             <div className="flex flex-wrap gap-4">
+               {uniqueOwners.map(owner => {
+                 const isActive = filterOwner === owner;
+                 const isDimmed = filterOwner && !isActive;
+                 return (
+                   <OwnerAvatar 
+                     key={owner}
+                     user={owner}
+                     isActive={isActive}
+                     isDimmed={isDimmed}
+                     onClick={() => setFilterOwner(isActive ? null : owner)}
+                   />
+                 );
+               })}
+             </div>
            </section>
 
            {Object.keys(albums).sort().map(albumName => {
@@ -474,7 +578,11 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
                                     {file.audioFormat}
                                   </span>
                                )}
-                               <span className="text-[10px] uppercase font-bold text-green-500 bg-green-900/20 px-1.5 py-0.5 rounded">{file.owner}</span>
+                               
+                               {/* NEW: Mini Avatar for Music List */}
+                               <div className="flex items-center gap-1.5">
+                                 <MiniAvatar user={file.owner} />
+                               </div>
                              </div>
                            </div>
                            <div className="flex items-center gap-3">
@@ -538,15 +646,21 @@ const MediaDetail: React.FC<MediaDetailProps> = ({
       </div>
 
       <div className="p-6 space-y-8">
-        {/* OWNERS FILTER */}
+        {/* OWNERS FILTER (UPDATED) */}
         <section>
            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-2">Filter by Owner</h3>
-           <div className="flex flex-wrap gap-2">
+           <div className="flex flex-wrap gap-4">
              {uniqueOwners.map(owner => {
                const isActive = filterOwner === owner;
                const isDimmed = filterOwner && !isActive;
                return (
-                 <button key={owner} onClick={() => setFilterOwner(isActive ? null : owner)} className={`flex items-center gap-2 px-3 py-1 rounded-full border transition-all duration-200 cursor-pointer ${isActive ? 'bg-green-500 border-green-400 text-black shadow-[0_0_10px_rgba(34,197,94,0.6)] scale-105 font-bold' : isDimmed ? 'bg-gray-800 border-gray-700 text-gray-600 opacity-60 hover:opacity-100 hover:text-gray-400' : 'bg-green-900/20 border-green-500/50 text-green-100 hover:bg-green-900/40'}`}><div className={`w-2 h-2 rounded-full shadow-sm ${isActive ? 'bg-black' : 'bg-green-500'}`}></div><span className="text-sm">{owner}</span></button>
+                 <OwnerAvatar 
+                   key={owner}
+                   user={owner}
+                   isActive={isActive}
+                   isDimmed={isDimmed}
+                   onClick={() => setFilterOwner(isActive ? null : owner)}
+                 />
                );
              })}
            </div>

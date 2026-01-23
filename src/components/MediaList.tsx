@@ -10,6 +10,66 @@ interface MediaListProps {
   selectedId?: string;
 }
 
+// --- HELPER: Owner Avatar Button ---
+const OwnerAvatar = ({ 
+  user, 
+  isActive, 
+  isDimmed, 
+  onClick 
+}: { 
+  user: string; 
+  isActive: boolean; 
+  isDimmed: boolean; 
+  onClick: () => void 
+}) => {
+  const [imgError, setImgError] = useState(false);
+
+  // Generate color for fallback initials
+  const getColor = (str: string) => {
+    const colors = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-orange-500', 'bg-pink-500', 'bg-indigo-500'];
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
+  };
+
+  return (
+    <button 
+      onClick={onClick}
+      className={`group flex flex-col items-center gap-1.5 transition-all duration-300 ${isDimmed ? 'opacity-40 grayscale hover:opacity-70 hover:grayscale-0' : 'opacity-100 scale-105'}`}
+    >
+      <div className={`relative w-11 h-11 rounded-2xl p-0.5 transition-all ${isActive ? 'bg-gradient-to-br from-orange-400 to-red-500 shadow-lg shadow-orange-500/20' : 'bg-transparent'}`}>
+        <div className="w-full h-full rounded-[14px] overflow-hidden bg-gray-800 relative border border-white/10">
+          {!imgError ? (
+            <img 
+              src={`/api/avatar/${user}`} 
+              alt={user} 
+              className="w-full h-full object-cover" 
+              onError={() => setImgError(true)} 
+            />
+          ) : (
+            <div className={`w-full h-full flex items-center justify-center text-white font-bold text-sm ${getColor(user)}`}>
+              {user.charAt(0).toUpperCase()}
+            </div>
+          )}
+          
+          {/* Active Gloss */}
+          {isActive && <div className="absolute inset-0 bg-white/10 pointer-events-none"></div>}
+        </div>
+
+        {/* Status Dot */}
+        <div className="absolute -bottom-0.5 -right-0.5 bg-gray-900 rounded-full p-0.5">
+           <div className="w-2.5 h-2.5 bg-green-500 rounded-full border border-gray-900 shadow-sm"></div>
+        </div>
+      </div>
+      
+      <span className={`text-[10px] font-bold tracking-wide truncate max-w-[60px] transition-colors ${isActive ? 'text-white' : 'text-gray-500 group-hover:text-gray-300'}`}>
+        {user}
+      </span>
+    </button>
+  );
+};
+
+
 const getIcon = (type: string, isAlbum = false) => {
   switch (type) {
     case 'Movie': return <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>;
@@ -35,11 +95,17 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
       .catch(console.error);
   }, []);
 
-  const availableOwners = useMemo(() => {
-    const owners = new Set<string>();
-    items.forEach(m => m.files.forEach(f => owners.add(f.owner)));
-    return Array.from(owners).sort();
-  }, [items]);
+  // Split owners into "Host" vs "Others"
+  const ownerGroups = useMemo(() => {
+    const others = new Set<string>();
+    items.forEach(m => m.files.forEach(f => {
+      if (f.owner !== hostUser) others.add(f.owner);
+    }));
+    return {
+      host: hostUser,
+      others: Array.from(others).sort()
+    };
+  }, [items, hostUser]);
 
   const displayedItems = useMemo(() => {
     return items.filter(item => {
@@ -65,8 +131,7 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
     });
   };
 
-  // --- THE NEW VIRTUAL ROW COMPONENT ---
-  // This function draws ONE single row. React-Window calls this thousands of times efficiently.
+  // --- ROW COMPONENT ---
   const Row = ({ index, style }: { index: number; style: React.CSSProperties }) => {
     const item = displayedItems[index];
     if (!item) return null;
@@ -94,6 +159,11 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
 
     const has4KRemux = uniqueRemuxes.some(r => r.is4K);
 
+    // --- 3D FORMAT LOGIC ---
+    const threeDTags = Array.from(new Set(
+        item.files.map(f => get3DFormat(f.rawFilename)).filter((f): f is string => f !== null)
+    ));
+
     // --- CLEANING LOGIC ---
     const editionMatch = item.name.match(/\{edition-([^}]+)\}/i);
     const editionName = editionMatch ? editionMatch[1] : null;
@@ -115,12 +185,12 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
             if (typeof q !== 'string' || q.trim().length === 0) return false;
             if (is4KQualityString(q)) return false;
             if (uniqueRemuxes.length > 0 && (q === '1080p' || q === '1080i')) return false;
+            if (q === '3D') return false; 
             return true;
         })
     )).slice(0, 3);
     
     const owners = Array.from(new Set(item.files.map(f => f.owner))).sort();
-    const is3D = item.files.some(f => get3DFormat(f.rawFilename));
 
     let albumCount = 0;
     let isAlbumView = false;
@@ -147,8 +217,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
         cardStyle = "bg-gray-800 border-transparent text-gray-200 hover:bg-gray-700";
     }
 
-    // IMPORTANT: We must apply the 'style' prop to the outer div, but we add some margin
-    // by using an inner div, because 'react-window' uses absolute positioning.
     return (
       <div style={style} className="px-4 py-1">
         <button
@@ -202,7 +270,6 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
 
           <div className="flex flex-row items-center ml-2 gap-1">
             
-            {/* MULTI-REMUX TAGS */}
             {uniqueRemuxes.map((badge, idx) => (
               <span key={idx} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap shadow-sm 
                   ${badge.is4K 
@@ -217,14 +284,14 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap ${selectedId === item.id ? 'border-black/20 bg-black/20 text-white' : 'border-plex-orange bg-plex-orange text-black'}`}>4K UHD</span>
             )}
             
-            {is3D && (
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap 
+            {threeDTags.map((tag, idx) => (
+              <span key={`3d-${idx}`} className={`text-[9px] font-bold px-1.5 py-0.5 rounded border whitespace-nowrap 
                   ${selectedId === item.id 
                       ? 'border-emerald-300 bg-emerald-600 text-white' 
                       : 'border-emerald-500 text-emerald-300 bg-emerald-900/40 shadow-[0_0_8px_rgba(52,211,153,0.3)]'}`}>
-                  3D
+                  {tag}
               </span>
-            )}
+            ))}
 
             {qualities.map((q, i) => {
               const isFlac = q.toUpperCase() === 'FLAC';
@@ -245,38 +312,59 @@ const MediaList: React.FC<MediaListProps> = ({ items, onSelect, selectedId }) =>
   return (
     <div className="flex flex-col h-full bg-gray-900 overflow-hidden">
       
-      {/* FILTER HEADER */}
-      <div className="flex-none p-3 bg-gray-900/95 backdrop-blur border-b border-gray-800 z-10 flex flex-wrap gap-3 items-center justify-between shadow-md">
-        <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Source</span>
-            <select 
-                value={filterOwner}
-                onChange={(e) => setFilterOwner(e.target.value)}
-                className="bg-gray-800 border border-gray-700 text-xs text-white rounded px-2 py-1 focus:outline-none focus:border-plex-orange cursor-pointer hover:bg-gray-750"
-            >
-                <option value="All">All Owners</option>
-                {availableOwners.map(owner => (
-                    <option key={owner} value={owner}>{owner}</option>
-                ))}
-            </select>
-        </div>
+      {/* FILTER HEADER (With New Avatar Row) */}
+      <div className="flex-none p-3 bg-gray-900/95 backdrop-blur border-b border-gray-800 z-10 flex flex-col gap-3 shadow-md">
+        
+        {/* AVATAR ROW */}
+        <div className="flex items-center gap-3 overflow-x-auto pb-2 scrollbar-hide px-1">
+          {/* 1. Host User (Me) */}
+          {ownerGroups.host && (
+            <OwnerAvatar 
+              user={ownerGroups.host}
+              isActive={filterOwner === ownerGroups.host}
+              isDimmed={filterOwner !== 'All' && filterOwner !== ownerGroups.host}
+              onClick={() => setFilterOwner(filterOwner === ownerGroups.host ? 'All' : ownerGroups.host)}
+            />
+          )}
 
-        {hostUser && (
-            <button
-                onClick={() => setMissingOnly(!missingOnly)}
-                className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-bold transition-all border ${
-                    missingOnly 
-                        ? 'bg-purple-600 border-purple-500 text-white shadow-lg' 
-                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-white hover:border-gray-500'
-                }`}
-                title="Show only items I do NOT have"
-            >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-                <span>Missing</span>
-            </button>
-        )}
+          {/* 2. Divider (Only if there are other users) */}
+          {ownerGroups.host && ownerGroups.others.length > 0 && (
+             <div className="w-px h-10 bg-gradient-to-b from-transparent via-gray-700 to-transparent mx-1 flex-shrink-0"></div>
+          )}
+
+          {/* 3. Other Users */}
+          {ownerGroups.others.map(user => (
+            <OwnerAvatar 
+              key={user}
+              user={user}
+              isActive={filterOwner === user}
+              isDimmed={filterOwner !== 'All' && filterOwner !== user}
+              onClick={() => setFilterOwner(filterOwner === user ? 'All' : user)}
+            />
+          ))}
+
+          {/* 4. "Missing" Toggle (Moved to right side of avatar bar) */}
+          {hostUser && (
+              <button
+                  onClick={() => setMissingOnly(!missingOnly)}
+                  className={`ml-auto flex flex-col items-center gap-1 group transition-all ${missingOnly ? 'opacity-100' : 'opacity-40 hover:opacity-100'}`}
+                  title="Show only items I do NOT have"
+              >
+                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center border transition-all ${
+                     missingOnly 
+                        ? 'bg-purple-600 border-purple-400 text-white shadow-[0_0_15px_rgba(147,51,234,0.4)]' 
+                        : 'bg-gray-800 border-gray-700 text-gray-500 hover:border-gray-500'
+                  }`}>
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                      </svg>
+                  </div>
+                  <span className={`text-[10px] font-bold tracking-wide ${missingOnly ? 'text-purple-300' : 'text-gray-600 group-hover:text-gray-400'}`}>
+                      Missing
+                  </span>
+              </button>
+          )}
+        </div>
       </div>
 
       {/* LIST CONTENT - VIRTUALIZED */}

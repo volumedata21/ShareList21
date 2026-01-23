@@ -32,6 +32,7 @@ const HOST_USER = process.env.HOST_USER || 'Guest';
 const MEDIA_ROOT = process.env.MEDIA_ROOT || '/media';
 const DOWNLOAD_ROOT = process.env.DOWNLOAD_ROOT || '/downloads';
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '0 3 * * *';
+const AVATAR_ROOT = process.env.AVATAR_ROOT || '/avatars';
 
 const ALLOWED_USERS = (process.env.APP_USERS || 'Guest').split(',').map(u => u.trim());
 
@@ -40,6 +41,9 @@ const httpAgent = new http.Agent({ keepAlive: true, timeout: 30000 });
 const httpsAgent = new https.Agent({ keepAlive: true, timeout: 30000 });
 
 if (!fs.existsSync('/data')) fs.mkdirSync('/data');
+if (!fs.existsSync(AVATAR_ROOT)) {
+  try { fs.mkdirSync(AVATAR_ROOT); } catch (e) { console.warn("Could not create avatar root:", e); }
+}
 if (DOWNLOAD_ROOT && !fs.existsSync(DOWNLOAD_ROOT)) {
   try { fs.mkdirSync(DOWNLOAD_ROOT); } catch (e) { console.warn("Could not create download root:", e); }
 }
@@ -586,6 +590,55 @@ app.post('/api/downloads/clear', requirePin, (req, res) => {
 app.get('/api/downloads', requirePin, (req, res) => {
   const list = Array.from(activeDownloads.values()).map(({ abortController, ...r }) => r).sort((a, b) => b.startTime - a.startTime);
   res.json(list);
+});
+
+// --- AVATAR ENDPOINT (Proxy Capable) ---
+app.get('/api/avatar/:user', async (req, res) => {
+  const user = req.params.user;
+  const safeUser = user.replace(/[^a-zA-Z0-9_-]/g, ''); 
+  
+  // 1. HOST MODE: Check local disk first
+  // If we have the volume mounted (Master), we serve from disk.
+  if (fs.existsSync(AVATAR_ROOT)) {
+    const extensions = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+    for (const ext of extensions) {
+      const localPath = path.join(AVATAR_ROOT, `${safeUser}.${ext}`);
+      if (fs.existsSync(localPath)) {
+        return res.sendFile(localPath);
+      }
+    }
+  }
+
+  // 2. CLIENT MODE: Ask the Master
+  // If we didn't find it locally, and we have a Master URL, ask them.
+  if (MASTER_URL) {
+    try {
+      // Ensure no trailing slash on Master URL
+      const cleanMaster = MASTER_URL.replace(/\/$/, '');
+      const targetUrl = `${cleanMaster}/api/avatar/${safeUser}`;
+      
+      console.log(`[Avatar Proxy] Requesting: ${targetUrl}`); // Debug log
+
+      // Use Node 20 Native Fetch
+      const r = await fetch(targetUrl);
+      
+      if (r.ok) {
+        // Forward the content type (image/png, etc.)
+        res.setHeader('Content-Type', r.headers.get('content-type') || 'image/jpeg');
+        
+        // Convert Web Stream to Buffer and send
+        const arrayBuffer = await r.arrayBuffer();
+        return res.send(Buffer.from(arrayBuffer));
+      } else {
+         console.warn(`[Avatar Proxy] Master returned ${r.status}`);
+      }
+    } catch (e: any) {
+      console.error(`[Avatar Proxy] Failed to connect to Master: ${e.message}`);
+    }
+  }
+
+  // 3. Fallback: 404 (Frontend will show the colored letter badge)
+  res.status(404).send('No avatar');
 });
 
 // --- STANDARD API ---

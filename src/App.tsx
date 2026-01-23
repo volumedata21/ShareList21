@@ -7,6 +7,106 @@ import DownloadManager from './components/DownloadManager';
 import StatsModal from './components/StatsModal';
 import { useToast } from './components/ToastContext';
 
+const UserAvatar = ({ user, onLogout }: { user: string; onLogout: () => void }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [imgError, setImgError] = useState(false);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const getColor = (str: string) => {
+    const colors = ['bg-red-500', 'bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-orange-500', 'bg-pink-500', 'bg-indigo-500'];
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
+  };
+
+  return (
+    <div className="relative z-50" ref={menuRef}>
+      <button 
+        onClick={() => setIsOpen(!isOpen)} 
+        className="relative group outline-none block"
+      >
+        {/* IDLE PULSE GLOW (Behind the avatar) */}
+        {/* Only shows when NOT open and NOT hovering (group-hover handles the rest) */}
+        <div className={`absolute inset-0 bg-orange-500/30 rounded-2xl blur-md transition-all duration-1000 
+          ${isOpen ? 'opacity-0' : 'animate-pulse opacity-100 group-hover:opacity-0'}
+        `}></div>
+
+        {/* AVATAR CONTAINER */}
+        <div className={`
+          relative w-14 h-14 rounded-2xl overflow-hidden transition-all duration-300 ease-out z-10
+          ${isOpen 
+            ? 'ring-4 ring-orange-500 shadow-[0_0_30px_rgba(249,115,22,0.6)] scale-105' 
+            : 'ring-2 ring-white/10 shadow-xl group-hover:ring-orange-500/50 group-hover:shadow-[0_0_25px_rgba(249,115,22,0.5)] group-hover:scale-105'
+          }
+        `}>
+          {!imgError ? (
+            <img 
+              src={`/api/avatar/${user}`} 
+              alt={user} 
+              className="w-full h-full object-cover" 
+              onError={() => setImgError(true)} 
+            />
+          ) : (
+            // Fallback Initials
+            <div className={`w-full h-full flex items-center justify-center text-white font-black text-2xl bg-gradient-to-br ${getColor(user)} to-gray-900`}>
+              {user.charAt(0).toUpperCase()}
+            </div>
+          )}
+
+          {/* Glossy Overlay */}
+          <div className="absolute inset-0 bg-gradient-to-tr from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"></div>
+        </div>
+        
+        {/* Status Dot */}
+        <div className="absolute -bottom-1 -right-1 flex h-4 w-4 z-20">
+            <span className={`absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75 ${isOpen ? 'animate-ping' : ''}`}></span>
+            <span className="relative inline-flex rounded-full h-4 w-4 bg-green-500 border-2 border-gray-900"></span>
+        </div>
+      </button>
+
+      {/* DROPDOWN MENU */}
+      {isOpen && (
+        <div className="absolute right-0 mt-4 w-60 bg-gray-900/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl z-50 animate-in fade-in slide-in-from-top-3 overflow-hidden ring-1 ring-black/50 origin-top-right">
+          
+          {/* Menu Header with Gradient */}
+          <div className="px-5 py-5 border-b border-white/5 bg-gradient-to-b from-white/5 to-transparent relative overflow-hidden">
+            {/* Decorative background glow */}
+            <div className="absolute -top-10 -right-10 w-20 h-20 bg-orange-500/20 blur-2xl rounded-full pointer-events-none"></div>
+            
+            <p className="text-[10px] font-bold text-orange-400 uppercase tracking-widest mb-1">Signed in as</p>
+            <div className="flex justify-between items-center">
+              <p className="text-white font-bold text-xl truncate tracking-tight">{user}</p>
+              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/10 text-gray-300 border border-white/5 shadow-inner">HOST</span>
+            </div>
+          </div>
+          
+          <div className="p-2">
+            <button 
+              onClick={onLogout}
+              className="w-full text-left px-4 py-3 rounded-xl text-sm font-medium text-red-300 hover:bg-red-500/10 hover:text-red-200 transition-all flex items-center gap-3 group border border-transparent hover:border-red-500/10"
+            >
+              <div className="p-2 rounded-lg bg-red-500/10 group-hover:bg-red-500 group-hover:text-white transition-colors shadow-sm">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+              </div>
+              <span className="font-semibold">Sign Out</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // Structure for tracking active downloads in the UI
 
 const App: React.FC = () => {
@@ -496,9 +596,14 @@ const App: React.FC = () => {
               )}
               
               {/* LOCK BUTTON */}
-              <button onClick={handleLock} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl transition-all" title="Lock App">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
-              </button>
+              {/* USER AVATAR / LOGOUT */}
+              {config?.hostUser ? (
+                <UserAvatar user={config.hostUser} onLogout={handleLock} />
+              ) : (
+                <button onClick={handleLock} className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded-xl transition-all" title="Lock App">
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                </button>
+              )}
             </div>
           </div>
 
