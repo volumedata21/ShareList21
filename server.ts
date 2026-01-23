@@ -6,7 +6,7 @@ import cron from 'node-cron';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { processFiles } from './scanner';
-import { MediaFile, SyncPayload, DownloadStatus, UploadStatus } from './src/types';
+import { MediaFile, SyncPayload } from './types';
 import http from 'http';
 import https from 'https';
 import { pipeline } from 'stream';
@@ -53,12 +53,32 @@ db.pragma('journal_mode = WAL');
 console.log(`Connected to DB. User: ${HOST_USER}`);
 
 // --- STATE ---
-// FIX: Extend the shared type to add the backend-only abortController
-interface ActiveDownload extends DownloadStatus {
+interface DownloadStatus {
+  id: string;
+  filename: string;
+  remoteUrl: string;
+  remotePath: string;
+  localPath: string;
+  totalBytes: number;
+  downloadedBytes: number;
+  status: 'pending' | 'downloading' | 'completed' | 'error' | 'cancelled' | 'skipped';
+  startTime: number;
+  speed: number;
+  error?: string;
   abortController?: AbortController;
 }
 
-const activeDownloads = new Map<string, ActiveDownload>();
+interface UploadStatus {
+  id: string;
+  filename: string;
+  user: string;
+  transferredBytes: number;
+  totalBytes: number;
+  speed: number; // bytes per second
+  startTime: number;
+}
+
+const activeDownloads = new Map<string, DownloadStatus>();
 const activeUploads = new Map<string, UploadStatus>();
 const generateId = () => Math.random().toString(36).substring(2, 9);
 const downloadQueue: string[] = [];
