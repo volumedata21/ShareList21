@@ -495,23 +495,101 @@ const App: React.FC = () => {
 
   if (configLoading) return <div className="h-screen bg-gray-900 flex items-center justify-center text-white"><div className="flex flex-col items-center gap-4"><div className="w-8 h-8 border-4 border-plex-orange border-t-transparent rounded-full animate-spin"></div></div></div>;
 
-  if (isLocked) { /* ... Lock Screen ... */
+  if (isLocked) {
     const isLockedOut = !!lockoutEnds;
     return (
-      <div className="h-screen bg-gray-900 flex items-center justify-center text-white p-4">
-        <div className="bg-gray-800 border border-gray-700 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden">
-          <div className="bg-gray-900/50 p-6 border-b border-gray-700 flex flex-col items-center">
-            <h1 className="text-xl font-bold flex items-center gap-2"><span className="text-plex-orange">►</span> ShareList21</h1>
-            <p className="text-xs text-gray-500 mt-1 uppercase tracking-wider font-bold">Restricted Access</p>
-          </div>
-          <div className="p-6 space-y-4">
-            <div className="space-y-1">
-              <label className="text-xs font-bold uppercase text-gray-400 tracking-wider ml-1">Application PIN</label>
-              <input type="password" value={pinInput} onChange={(e) => { setPinInput(e.target.value); setAuthError(false); }} onKeyDown={(e) => e.key === 'Enter' && !isLockedOut && handleUnlock()} placeholder={isLockedOut ? `Locked: ${timeLeft}s` : "••••••••"} autoFocus disabled={isLockedOut} className={`w-full bg-gray-900 border rounded p-3 text-white placeholder:text-gray-700 focus:outline-none transition-colors text-center font-mono text-lg ${isLockedOut ? 'border-red-900 bg-red-900/10 text-red-400 cursor-not-allowed placeholder:text-red-500/50' : authError ? 'border-red-500 text-red-200' : 'border-gray-600 focus:border-plex-orange'}`} />
-              {isLockedOut ? <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">Too many attempts. Wait {timeLeft}s.</p> : authError && <p className="text-xs text-red-400 text-center font-bold mt-2 animate-pulse">Access Denied {failedAttempts > 0 && `(${failedAttempts}/5)`}</p>}
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
+        {/* Main Card */}
+        <div className="relative w-full max-w-sm bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col items-center p-8">
+          
+          {/* Subtle Top Lighting */}
+          <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent"></div>
+          
+          {/* Logo Container with Glow */}
+          <div className="relative mb-6 group">
+            <div className="absolute -inset-2 bg-gradient-to-br from-orange-500 to-red-600 rounded-2xl blur-lg opacity-20 group-hover:opacity-40 transition duration-1000"></div>
+            <div className="relative w-20 h-20 bg-gray-800 rounded-2xl flex items-center justify-center shadow-2xl ring-1 ring-white/10 overflow-hidden">
+               <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-black opacity-90"></div>
+               <svg className="relative w-10 h-10 drop-shadow-md" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="lockIconGrad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                      <stop offset="0%" stopColor="#fbbf24" /> {/* Amber-400 */}
+                      <stop offset="100%" stopColor="#ea580c" /> {/* Orange-600 */}
+                    </linearGradient>
+                  </defs>
+                  <path stroke="url(#lockIconGrad)" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
             </div>
-            <button onClick={handleUnlock} disabled={loading || !pinInput || isLockedOut} className={`w-full font-bold py-3 rounded shadow-lg transition-colors ${isLockedOut || !pinInput ? 'bg-gray-700 text-gray-500 cursor-not-allowed' : 'bg-plex-orange hover:bg-yellow-600 text-black'}`}>{isLockedOut ? 'Locked' : 'Unlock'}</button>
           </div>
+
+          {/* Title */}
+          <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-400 tracking-tight mb-1">
+            ShareList21
+          </h1>
+          <div className="flex items-center gap-2 mb-8">
+            <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></div>
+            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+              Restricted Access
+            </p>
+          </div>
+
+          {/* Input Area */}
+          <div className="w-full space-y-4">
+            <div className="space-y-2">
+              <input 
+                type="password" 
+                value={pinInput} 
+                onChange={(e) => { setPinInput(e.target.value); setAuthError(false); }} 
+                onKeyDown={(e) => e.key === 'Enter' && !isLockedOut && handleUnlock()} 
+                // UPDATED: Mixed case placeholder
+                placeholder={isLockedOut ? `Locked: ${timeLeft}s` : "Enter PIN"} 
+                autoFocus 
+                disabled={isLockedOut} 
+                // UPDATED: text-base (smaller) and tracking-normal (0 kerning)
+                className={`w-full bg-black/50 border rounded-xl p-4 text-white placeholder:text-gray-600 text-center font-bold text-base tracking-normal outline-none transition-all duration-300 shadow-inner
+                  ${isLockedOut 
+                    ? 'border-red-900/50 bg-red-950/20 text-red-400 cursor-not-allowed placeholder:text-red-500/30' 
+                    : authError 
+                        ? 'border-red-500/50 text-red-200 ring-2 ring-red-500/20' 
+                        : 'border-white/10 focus:border-orange-500/50 focus:ring-2 focus:ring-orange-500/20 focus:bg-black/80'
+                  }`} 
+              />
+              
+              {/* Error / Status Messages */}
+              <div className="h-5 flex items-center justify-center">
+                {isLockedOut ? (
+                   <p className="text-xs text-red-400 font-bold animate-pulse">Too many attempts. Wait {timeLeft}s.</p> 
+                ) : authError ? (
+                   <p className="text-xs text-red-400 font-bold animate-shake">Access Denied {failedAttempts > 0 && `(${failedAttempts}/5)`}</p>
+                ) : (
+                   <p className="text-[10px] text-gray-600">Please verify your identity.</p>
+                )}
+              </div>
+            </div>
+
+            <button 
+              onClick={handleUnlock} 
+              disabled={loading || !pinInput || isLockedOut} 
+              className={`w-full font-bold py-3.5 rounded-xl shadow-lg transition-all duration-300 transform active:scale-95 flex items-center justify-center gap-2
+                ${isLockedOut || !pinInput 
+                  ? 'bg-gray-800 text-gray-600 cursor-not-allowed border border-white/5' 
+                  : 'bg-gradient-to-br from-orange-500 to-red-600 hover:from-orange-400 hover:to-red-500 text-white shadow-orange-900/20 hover:shadow-orange-600/30 border border-white/10'
+                }`}
+            >
+              {loading ? (
+                <svg className="w-5 h-5 animate-spin text-white/50" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+              ) : isLockedOut ? (
+                <span className="flex items-center gap-2"><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg> Locked</span>
+              ) : (
+                <>Unlock Server</>
+              )}
+            </button>
+          </div>
+        </div>
+        
+        {/* Footer Credit */}
+        <div className="absolute bottom-6 text-[10px] text-gray-600 font-medium">
+           Protected System • Authorized Personnel Only
         </div>
       </div>
     );
